@@ -15,7 +15,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis budget | cost & latency governor: spend vs caps, auto-downshift | `aegis budget [-h] [{status}]` |
 | aegis bundles | list skill bundles (alias of `aegis skills bundles`) | `aegis bundles [-h] [--json]` |
 | aegis chat | chat with the agent (default) | `aegis chat [-h] [-q QUERY] [-m MODEL] [--provider PROVIDER]                   [--resume RESUME] [--continue] [--yolo] [--worktree]                   [--image IMAGE] [-s SKILLS]                   [prompt ...]` |
-| aegis checkpoints | list/diff/rollback/clear file checkpoints | `aegis checkpoints [-h] [{list,diff,rollback,clear}] [id]` |
+| aegis checkpoints | list/diff/rollback/clear file checkpoints | `aegis checkpoints [-h] [--older-than-days OLDER_THAN_DAYS]                          [--keep KEEP] [--keep-orphans]                          [--max-size-mb MAX_SIZE_MB] [--limit LIMIT]                          [--file FILE_PATH]                          [{list,status,diff,rollback,prune,clear,clear-legacy}]                          [id]` |
 | aegis claw | OpenClaw migration and cleanup compatibility tools | `aegis claw [-h] {migrate,cleanup,clean} ...` |
 | aegis claw clean |  | `aegis claw cleanup [-h] [--source SOURCE] [--dry-run] [--yes]` |
 | aegis claw cleanup | archive leftover OpenClaw directories | `aegis claw cleanup [-h] [--source SOURCE] [--dry-run] [--yes]` |
@@ -39,6 +39,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis gstack | run a goal through a sprint of roles (think→plan→build→review→test→ship→reflect) | `aegis gstack [-h] [--phases PHASES] [--from FROM_PHASE] [--dry]                     [goal ...]` |
 | aegis gui | open the AEGIS control panel in your browser | `aegis gui [-h] [--host HOST] [--port PORT] [--no-open] {register} ...` |
 | aegis gui register | register or preview dashboard OAuth metadata | `aegis gui register [-h] [--dry-run] [--client-name CLIENT_NAME]` |
+| aegis help | show top-level or command help | `aegis help [-h] [topic]` |
 | aegis hooks | lifecycle shell hooks | `aegis hooks [-h] [{list,test,doctor,revoke,remove,rm}] [event]` |
 | aegis import | restore a backup zip | `aegis import [-h] path` |
 | aegis improve | verified self-improvement: keep curator edits only if the benchmark holds | `aegis improve [-h] [--min-delta MIN_DELTA] [--limit LIMIT] [{run,log}]` |
@@ -52,8 +53,8 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis lsp install | install a managed language server by id or extension | `aegis lsp install [-h] [--dry-run] server` |
 | aegis lsp status | show LSP/code-intelligence readiness | `aegis lsp status [-h]` |
 | aegis maturity | show architecture maturity and live-QA accounting | `aegis maturity [-h] [--json] [--check] [--write [WRITE]] [--verbose]` |
-| aegis mcp | manage MCP servers (or `serve` to be one) | `aegis mcp [-h] [--include INCLUDE] [--exclude EXCLUDE] [--all]                  [{list,add,remove,test,serve,catalog,install,tools,configure,login,picker}]                  [name] [cmd]` |
-| aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user] [--yes]                     [--target {all,memory,user}]                     [{show,add,replace,remove,clear,status,setup,off,reset}]                     [text ...]` |
+| aegis mcp | manage MCP servers (or `serve` to be one) | `aegis mcp [-h] [--include INCLUDE] [--exclude EXCLUDE] [--all]                  [--manual]                  [{list,add,remove,test,serve,catalog,install,tools,configure,login,picker}]                  [name] [cmd]` |
+| aegis memory | show/add/replace/remove/status long-term memory | `aegis memory [-h] [--old-text OLD_TEXT] [--user] [--yes]                     [--target {all,memory,user}]                     [{show,add,replace,remove,clear,status,setup,off,reset,pending,approve,apply,reject,deny,drop,approval,mode}]                     [text ...]` |
 | aegis migrate | migrate/normalize config (alias of `aegis config migrate`) | `aegis migrate [-h] [--dry-run] [--json] {xai} ...` |
 | aegis migrate xai | diagnose retired xAI model references | `aegis migrate xai [-h] [--dry-run] [--apply] [--no-backup]` |
 | aegis moa | manage Mixture-of-Agents model slots | `aegis moa [-h] [--models MODELS] [{list,ls,configure,config,delete}]` |
@@ -115,7 +116,7 @@ Generated from `aegis.cli.main.build_parser()`.
 | aegis sessions | list/show/export/rename/remove/check sessions | `aegis sessions [-h] [--json] [--limit LIMIT] [--include-internal]                       [--yes] [--older-than-days OLDER_THAN_DAYS] [--repair]                       [--session-limit SESSION_LIMIT] [--run-limit RUN_LIMIT]                       [--stale-running-seconds STALE_RUNNING_SECONDS]                       [--stale-resume-pending-seconds STALE_RESUME_PENDING_SECONDS]                       [{list,ls,browse,show,rename,rm,delete,remove,export,prune,optimize,stats,summarize,search,check,repair}]                       [id] [value ...]` |
 | aegis setup | interactive setup wizard | `aegis setup [-h] [--quick] [--advanced] [--no-probe] [--no-services]                    [--non-interactive] [--accept-risk] [--json]                    [--provider PROVIDER]                    [--auth {skip,api-key,local,oauth,codex}] [--model MODEL]                    [--web WEB] [--toolsets TOOLSETS] [--skills SKILLS]                    [--channels CHANNELS]                    [--exec-mode {ask,auto,allowlist,deny,full,smart}]                    [--install-services]                    [{model,terminal,tools,gateway,agent,web,memory,dashboard,services}]` |
 | aegis setup-whatsapp-cloud | configure the native WhatsApp Cloud webhook bridge | `aegis setup-whatsapp-cloud [-h] [--dry-run] [--json]` |
-| aegis skills | list/view/create/install/search/remove/uninstall skills | `aegis skills [-h] [--force] [--json] [--members MEMBERS]                     [--description DESCRIPTION] [--instruction INSTRUCTION]                     [--to {local,github,clawhub}] [--repo REPO]                     [{list,view,new,install,search,remove,uninstall,hub,preview,inspect,browse,check,update,audit,config,opt-in,opt-out,tap,snapshot,list-modified,diff,reset,repair-official,publish,bundles,bundle,unbundle}]                     [name] [target]` |
+| aegis skills | list/view/create/install/search/remove/uninstall skills | `aegis skills [-h] [--force] [--json] [--members MEMBERS]                     [--description DESCRIPTION] [--instruction INSTRUCTION]                     [--to {local,github,clawhub}] [--repo REPO]                     [{list,view,new,install,search,remove,uninstall,hub,preview,inspect,browse,check,update,audit,config,opt-in,opt-out,tap,snapshot,list-modified,diff,reset,repair-official,publish,bundles,bundle,unbundle,pending,approve,apply,reject,deny,drop,approval,mode}]                     [name] [target]` |
 | aegis slack | run Slack gateway or generate Slack app manifest | `aegis slack [-h] {manifest} ...` |
 | aegis slack manifest | generate a Slack app manifest JSON | `aegis slack manifest [-h] [--write [WRITE]] [--name NAME]                             [--description DESCRIPTION] [--slashes-only]                             [--no-assistant]` |
 | aegis snapshot | config/state snapshots (auto before updates) | `aegis snapshot [-h] [{create,restore,prune,list}] [label]` |

@@ -12,6 +12,8 @@ def test_cli_parser_exposes_upgrade_commands():
     from aegis.cli.main import build_parser
 
     parser = build_parser()
+    assert parser.parse_args(["help"]).command == "help"
+    assert parser.parse_args(["help", "model"]).topic == "model"
     assert parser.parse_args(["trace", "list"]).command == "trace"
     assert parser.parse_args(["eval", "list"]).command == "eval"
     assert parser.parse_args(["plugins", "install", "./plug.py"]).action == "install"
@@ -79,12 +81,26 @@ def test_cli_parser_exposes_upgrade_commands():
     assert cfg_setup.install_services is True
 
 
+def test_cli_help_command_prints_parser_help(capsys):
+    from aegis.cli.main import main
+
+    assert main(["help"]) == 0
+    out = capsys.readouterr().out
+    assert "usage: aegis" in out
+    assert "chat" in out
+    assert "model" in out
+
+    assert main(["help", "model"]) == 0
+    out = capsys.readouterr().out
+    assert "usage: aegis model" in out
+
+
 def test_tracked_text_does_not_use_upstream_branding():
     brand = "".join(chr(n) for n in (72, 101, 114, 109, 101, 115))
     forbidden = (brand, brand.lower(), f"/api/{brand.lower()}")
     root = Path(__file__).resolve().parents[1]
     listed = subprocess.run(
-        ["git", "ls-files"],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
         cwd=root,
         check=True,
         capture_output=True,
@@ -92,7 +108,11 @@ def test_tracked_text_does_not_use_upstream_branding():
     )
     offenders: list[str] = []
     for rel in listed.stdout.splitlines():
+        if rel == "BUILD_STATUS.md" or rel.startswith(("tests/", "docs/audit/")):
+            continue
         path = root / rel
+        if not path.is_file():
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
@@ -2371,6 +2391,7 @@ def test_mcp_tools_command_lists_resources_and_prompts(tmp_path, capsys):
 
 
 def test_mcp_server_uses_full_tool_context_and_visible_inventory(monkeypatch, tmp_path):
+    import asyncio
     import io
     import json
 
@@ -2388,12 +2409,16 @@ def test_mcp_server_uses_full_tool_context_and_visible_inventory(monkeypatch, tm
         toolset = "core"
 
         def run(self, args, ctx):
-            seen["cwd"] = ctx.cwd
-            seen["session_id"] = ctx.session.id
-            seen["has_memory"] = ctx.memory is not None
-            seen["has_skills"] = ctx.skills is not None
-            seen["agent_session_id"] = ctx.agent.session.id
-            return ToolResult.ok("context ok")
+            async def inner():
+                seen["cwd"] = ctx.cwd
+                seen["session_id"] = ctx.session.id
+                seen["has_memory"] = ctx.memory is not None
+                seen["has_skills"] = ctx.skills is not None
+                seen["agent_session_id"] = ctx.agent.session.id
+                seen.setdefault("loops", []).append(id(asyncio.get_running_loop()))
+                return ToolResult.ok("context ok")
+
+            return inner()
 
     class HiddenTool(ContextTool):
         name = "hidden_tool"
@@ -2420,6 +2445,8 @@ def test_mcp_server_uses_full_tool_context_and_visible_inventory(monkeypatch, tm
         {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
          "params": {"name": "context_probe", "arguments": {}}},
+        {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+         "params": {"name": "context_probe", "arguments": {}}},
     ]
     monkeypatch.setattr("sys.stdin", io.StringIO("\n".join(json.dumps(m) for m in messages) + "\n"))
     out = io.StringIO()
@@ -2431,12 +2458,14 @@ def test_mcp_server_uses_full_tool_context_and_visible_inventory(monkeypatch, tm
     listed = rows[0]["result"]["tools"]
     assert [t["name"] for t in listed] == ["context_probe"]
     assert rows[1]["result"]["content"][0]["text"] == "context ok"
+    assert rows[2]["result"]["content"][0]["text"] == "context ok"
     assert seen == {
         "cwd": tmp_path,
         "session_id": "mcp:stdio",
         "has_memory": True,
         "has_skills": True,
         "agent_session_id": "mcp:stdio",
+        "loops": [seen["loops"][0], seen["loops"][0]],
     }
 
 

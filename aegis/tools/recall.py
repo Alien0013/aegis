@@ -30,6 +30,7 @@ class SessionSearchTool(Tool):
         "of asking them to repeat context."
     )
     toolset = "core"
+    extra_toolsets = ["session_search"]
     parameters = {
         "type": "object",
         "properties": {

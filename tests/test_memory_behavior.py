@@ -78,6 +78,35 @@ def test_external_drift_backed_up_and_refused(store, tmp_path):
     assert baks and "Z" * 3000 in baks[0].read_text()       # nothing lost
 
 
+def test_batch_applies_atomically_against_final_budget(tmp_path):
+    store = MemoryStore(base=tmp_path, memory_char_limit=22)
+    assert "remembered" in store.add("memory", "abcdefghij")
+    assert "remembered" in store.add("memory", "klmnop")
+    assert store.add("memory", "XYZ").startswith("memory full")
+
+    result = store.apply_batch("memory", [
+        {"action": "remove", "old_text": "klmnop"},
+        {"action": "add", "content": "XYZ"},
+    ])
+
+    assert result.startswith("applied 2 operation")
+    assert store.entries("memory") == ["abcdefghij", "XYZ"]
+
+
+def test_batch_abort_leaves_memory_unchanged(tmp_path):
+    store = MemoryStore(base=tmp_path)
+    store.add("memory", "alpha")
+    store.add("memory", "beta")
+
+    result = store.apply_batch("memory", [
+        {"action": "remove", "old_text": "missing"},
+        {"action": "add", "content": "gamma"},
+    ])
+
+    assert "No operations were applied" in result
+    assert store.entries("memory") == ["alpha", "beta"]
+
+
 def test_usage_gauge_format(store):
     store.add("user", "name is TJ")
     assert "/1,375 chars" in store.usage("user")
@@ -121,9 +150,79 @@ def test_tool_old_text_alias_and_no_match_errors(tmp_path, monkeypatch):
     assert mm.store.raw("memory") == before
 
 
-def test_memory_tool_schema_exposes_only_aegis_actions():
+def test_missing_old_text_error_lists_current_entries(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.memory import MemoryManager
+
+    mm = MemoryManager(Config.load())
+    mm.handle_tool({"action": "add", "target": "memory", "content": "fact one"})
+
+    replace = mm.handle_tool({"action": "replace", "target": "memory", "content": "fact 1"})
+    remove = mm.handle_tool({"action": "remove", "target": "memory"})
+
+    assert replace.is_error and "Current entries" in replace.content and "fact one" in replace.content
+    assert remove.is_error and "Current entries" in remove.content and "fact one" in remove.content
+
+
+def test_handle_tool_stages_and_replays_batch_memory_write(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis import write_approval as wa
+    from aegis.config import Config
+    from aegis.memory import MemoryManager
+
+    config = Config.load()
+    config.data.setdefault(wa.MEMORY, {})[wa.CONFIG_KEY] = True
+    mm = MemoryManager(config)
+
+    result = mm.handle_tool({
+        "target": "memory",
+        "operations": [{"action": "add", "content": "batched fact"}],
+    })
+
+    assert not result.is_error, result.content
+    assert result.data["staged"] is True
+    assert mm.store.entries("memory") == []
+
+    record = wa.get_pending(wa.MEMORY, result.data["pending_id"], config=config)
+    assert record["payload"]["action"] == "batch"
+    assert record["payload"]["operations"] == [{"action": "add", "content": "batched fact"}]
+
+    applied = mm.handle_tool(record["payload"], bypass_write_approval=True)
+    assert not applied.is_error, applied.content
+    assert applied.data["done"] is True
+    assert mm.store.entries("memory") == ["batched fact"]
+
+
+def test_memory_tool_schema_exposes_hermes_style_atomic_operations():
     from aegis.tools.builtin import MemoryTool
+
     assert MemoryTool.parameters["properties"]["action"]["enum"] == ["add", "replace", "remove"]
+    assert MemoryTool.parameters["required"] == ["target"]
+    operations = MemoryTool.parameters["properties"]["operations"]
+    assert operations["type"] == "array"
+    assert operations["items"]["properties"]["action"]["enum"] == ["add", "replace", "remove"]
+    assert "atomic" in operations["description"].lower()
+    assert "operations array" in MemoryTool.description
+
+
+def test_handle_tool_batch_replace_without_content_is_recoverable_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+    from aegis.config import Config
+    from aegis.memory import MemoryManager
+
+    mm = MemoryManager(Config.load())
+    mm.handle_tool({"action": "add", "target": "memory", "content": "fact one"})
+
+    result = mm.handle_tool({
+        "target": "memory",
+        "operations": [{"action": "replace", "old_text": "fact one"}],
+    })
+
+    assert result.is_error
+    assert "content is required" in result.content
+    assert "No operations were applied" in result.content
+    assert mm.store.entries("memory") == ["fact one"]
 
 
 def test_memory_prompts_require_split_targets():

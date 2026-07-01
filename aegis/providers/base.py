@@ -53,6 +53,7 @@ class ProviderTransport(ABC):
         on_response_id: OnResponseId | None = None,
         service_tier: str = "",
         response_format: dict | None = None,
+        request_overrides: dict | None = None,
     ) -> LLMResponse:
         """Make one completion call and return a normalized response."""
         raise NotImplementedError
@@ -127,6 +128,17 @@ class Provider:
             extra_kwargs["service_tier"] = clean_service_tier
         if response_format and "response_format" in params:
             extra_kwargs["response_format"] = response_format
+        request_overrides = getattr(self, "request_overrides", None)
+        if isinstance(request_overrides, dict) and "request_overrides" in params:
+            extra_kwargs["request_overrides"] = request_overrides
+        fallback_orchestrated = bool(
+            isinstance(metadata, dict) and metadata.get("_fallback_orchestrated")
+        )
+        if fallback_orchestrated and isinstance(metadata, dict):
+            cleaned_metadata = dict(metadata)
+            cleaned_metadata.pop("_fallback_orchestrated", None)
+            if "metadata" in params:
+                extra_kwargs["metadata"] = cleaned_metadata
         attempts = 0
         while True:
             try:
@@ -147,22 +159,45 @@ class Provider:
                     **extra_kwargs,
                 )
             except Exception as e:  # noqa: BLE001
-                # Map the failure to a precise recovery action and act on it:
-                #   abort/compress -> don't retry here (the loop compacts on context_overflow);
-                #   rotate -> switch key/provider then retry; retry -> jittered backoff.
+                # Let the classifier decide whether this can recover on the same
+                # provider. When FallbackProvider is orchestrating, non-credential
+                # recovery is handed back immediately so the chain can advance.
                 import random
                 import time
-                from .fallback import classify_provider_error, recovery_action
-                kind = classify_provider_error(e)
-                action = recovery_action(kind)
-                if action in ("abort", "compress") or attempts >= 4:
-                    raise
-                if action == "rotate":
-                    # credential-pool policy: billing -> cooldown+rotate, rate_limit/auth -> rotate
-                    if hasattr(self.auth, "report"):
-                        self.auth.report(kind)
+                from .fallback import classify_provider_failure, provider_failure_error_context
+                failure = classify_provider_failure(
+                    e,
+                    provider=self,
+                    model=model or self.model,
+                    base_url=self.base_url,
+                )
+                kind = failure.legacy_reason
+                action = failure.recovery
+                error_context = provider_failure_error_context(e, failure)
+                credential_rotated = False
+                if failure.rotate_credentials:
+                    report_kind = "auth_permanent" if failure.reason == "auth_permanent" else kind
+                    report = getattr(self.auth, "report", None)
+                    if callable(report):
+                        try:
+                            credential_rotated = bool(report(report_kind, error_context=error_context))
+                        except TypeError:
+                            credential_rotated = bool(report(report_kind))
                     elif hasattr(self.auth, "rotate"):
-                        self.auth.rotate()
+                        credential_rotated = bool(self.auth.rotate())
+                if action in ("abort", "compress", "strip_thinking"):
+                    raise
+                if action == "rotate" and not credential_rotated:
+                    raise
+                if fallback_orchestrated and failure.fallback_eligible and not (
+                    credential_rotated and failure.retry_same_provider
+                ):
+                    raise
+                if attempts >= 4:
+                    raise
+                if credential_rotated and failure.retry_same_provider:
+                    attempts += 1
+                    continue
                 time.sleep(min(30.0, (2 ** attempts) * 1.5) + random.random())
                 attempts += 1
                 continue

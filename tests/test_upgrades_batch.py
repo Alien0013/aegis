@@ -31,6 +31,46 @@ def test_loop_guard_no_progress_on_success():
     assert g.record("write_file", {"path": "x"}, "wrote", False) is None
 
 
+def test_loop_guard_hard_stop_blocks_no_progress_reads():
+    from aegis.agent.guardrails import ToolLoopGuard
+
+    g = ToolLoopGuard(
+        warn_after=2,
+        block_after=5,
+        hard_stop=True,
+        no_progress_block_after=3,
+    )
+    args = {"path": "same.txt"}
+    for _ in range(3):
+        g.record("read_file", args, "same content", False)
+
+    blocked = g.check("read_file", args)
+    assert blocked and "returned the same result 3 times" in blocked
+    assert "refusing to run it again" in blocked
+
+
+def test_loop_guard_hard_stop_records_same_tool_halt_reason():
+    from aegis.agent.guardrails import ToolLoopGuard
+
+    g = ToolLoopGuard(
+        warn_after=5,
+        block_after=10,
+        same_tool_warn_after=2,
+        same_tool_halt_after=3,
+        hard_stop=True,
+    )
+    assert g.record("bash", {"command": "bad-one"}, "err-a", True) is None
+    assert "bash has failed 2 times this turn" in g.record("bash", {"command": "bad-two"}, "err-b", True)
+    warning = g.record("bash", {"command": "bad-three"}, "err-c", True)
+
+    assert warning and "hard-stop mode" in warning
+    assert g.halt_reason and "bash has failed 3 times this turn" in g.halt_reason
+    blocked = g.check("bash", {"command": "bad-four"})
+    assert blocked and "Tool execution is halted for this tool" in blocked
+    assert "bash has failed 3 times this turn" in blocked
+    assert g.check("read_file", {"path": "ok.txt"}) is None
+
+
 def test_loop_guard_warns_same_tool_failures_with_varied_args():
     from aegis.agent.guardrails import ToolLoopGuard
     g = ToolLoopGuard(warn_after=3, block_after=5, same_tool_warn_after=2)

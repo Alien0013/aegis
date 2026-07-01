@@ -128,7 +128,9 @@ def cmd_tui(args: Namespace, config: Config) -> int:
     store = SessionStore()
     resume = str(getattr(args, "resume", "") or "").strip()
     if resume:
-        session = store.load(resume)
+        resolver = getattr(store, "resolve_resume_session_id", None)
+        resolved = resolver(resume) if callable(resolver) else None
+        session = store.load(resolved or resume)
         if session is None:
             print(f"session '{resume}' not found", file=sys.stderr)
             return 1

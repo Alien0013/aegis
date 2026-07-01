@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 def _ctx(tmp_path):
     from aegis.config import Config
@@ -41,6 +43,46 @@ def test_read_file_blocks_devices_binary_and_oversized_results(tmp_path):
     assert res.is_error and "safety limit" in res.content and "offset and limit" in res.content
 
 
+def test_tool_output_hermes_config_aliases_for_read_file(tmp_path):
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import ReadFileTool
+
+    cfg = Config.load()
+    cfg.data["tool_output"] = {
+        "max_lines": 2,
+        "max_line_length": 4,
+        "max_bytes": 10_000,
+    }
+    ctx = ToolContext(cwd=tmp_path, config=cfg)
+    target = tmp_path / "story.txt"
+    target.write_text("abcdef\nsecondline\nthirdline\n", encoding="utf-8")
+
+    res = ReadFileTool().run({"path": "story.txt", "limit": 50}, ctx)
+
+    assert not res.is_error
+    assert "1|abcd ... [line truncated]" in res.content
+    assert "2|seco ... [line truncated]" in res.content
+    assert "3|" not in res.content
+
+
+def test_tool_output_max_bytes_alias_truncates_tool_output(tmp_path):
+    from aegis.config import Config
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import ReadFileTool
+
+    cfg = Config.load()
+    cfg.data["tool_output"] = {"max_bytes": 20}
+    ctx = ToolContext(cwd=tmp_path, config=cfg)
+    (tmp_path / "large.txt").write_text("x" * 200, encoding="utf-8")
+
+    res = ReadFileTool().run({"path": "large.txt"}, ctx)
+
+    assert not res.is_error
+    assert "truncated" in res.content
+    assert len(res.content) < 80
+
+
 def test_file_tools_preserve_bom_mode_and_crlf(tmp_path, monkeypatch):
     import os
     import stat
@@ -72,6 +114,60 @@ def test_file_tools_preserve_bom_mode_and_crlf(tmp_path, monkeypatch):
     failed = WriteFileTool().run({"path": "bom.txt", "content": "corrupt"}, ctx)
     assert failed.is_error
     assert target.read_bytes() == original
+
+
+def test_write_file_rejects_read_file_display_text(tmp_path):
+    from aegis.tools.builtin import ReadFileTool, WriteFileTool
+
+    ctx = _ctx(tmp_path)
+    target = tmp_path / "source.txt"
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    read_result = ReadFileTool().run({"path": "source.txt"}, ctx)
+    out = WriteFileTool().run({"path": "copy.txt", "content": read_result.content}, ctx)
+
+    assert out.is_error
+    assert "read_file display text" in out.content
+    assert not (tmp_path / "copy.txt").exists()
+
+
+def test_search_files_alias_supports_hermes_pagination_modes(tmp_path):
+    import json
+
+    from aegis.tools.builtin import SearchTool, WriteFileTool
+
+    ctx = _ctx(tmp_path)
+    WriteFileTool().run({"path": "src/one.py", "content": "needle = 1\n"}, ctx)
+    WriteFileTool().run({"path": "src/two.py", "content": "needle = 2\nneedle = 3\n"}, ctx)
+    WriteFileTool().run({"path": "notes.txt", "content": "needle = outside\n"}, ctx)
+
+    files = SearchTool().run(
+        {"target": "files", "pattern": "*.py", "path": "src", "limit": 1, "offset": 1},
+        ctx,
+    )
+    counts = SearchTool().run(
+        {"pattern": "needle", "path": "src", "file_glob": "*.py", "output_mode": "count"},
+        ctx,
+    )
+    page = SearchTool().run(
+        {"pattern": "needle", "path": "src", "file_glob": "*.py", "limit": 1, "offset": 1},
+        ctx,
+    )
+
+    assert not files.is_error, files.content
+    files_data = json.loads(files.content)
+    assert files_data["files"] and len(files_data["files"]) == 1
+    assert files_data["truncated"] is False
+
+    counts_data = json.loads(counts.content)
+    assert counts_data["total_count"] == 3
+    assert any(path.endswith("one.py") for path in counts_data["counts"])
+    assert any(path.endswith("two.py") for path in counts_data["counts"])
+
+    page_data = json.loads(page.content)
+    assert page_data["total_count"] == 3
+    assert page_data["truncated"] is True
+    assert len(page_data["matches"]) == 1
 
 
 def test_write_file_safe_root_and_sensitive_system_paths(tmp_path, monkeypatch):
@@ -292,9 +388,89 @@ def test_todo_tool(tmp_path):
     from aegis.config import Config
     s = Session.create()
     ctx = ToolContext(cwd=tmp_path, config=Config.load(), session=s)
-    TodoWriteTool().run({"todos": [{"content": "a", "status": "completed"},
-                                   {"content": "b", "status": "pending"}]}, ctx)
+    res = TodoWriteTool().run({"todos": [{"content": "a", "status": "completed"},
+                                          {"content": "b", "status": "pending"}]}, ctx)
     assert len(s.todos) == 2
+    assert res.data["summary"] == {
+        "total": 2,
+        "pending": 1,
+        "in_progress": 0,
+        "completed": 1,
+        "cancelled": 0,
+    }
+
+    read = TodoWriteTool().run({}, ctx)
+    assert json.loads(read.content)["todos"] == s.todos
+
+
+def test_todo_tool_merges_json_string_and_cancelled_status(tmp_path):
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import TodoWriteTool
+
+    session = Session.create()
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), session=session)
+    tool = TodoWriteTool()
+
+    first = tool.run({
+        "todos": json.dumps([
+            {"id": "a", "content": "draft patch", "status": "pending"},
+            {"id": "b", "content": "run tests", "status": "pending"},
+        ])
+    }, ctx)
+    assert not first.is_error
+
+    merged = tool.run({
+        "merge": True,
+        "todos": [
+            {"id": "a", "status": "in_progress"},
+            {"id": "c", "content": "drop stale approach", "status": "cancelled"},
+        ],
+    }, ctx)
+    body = json.loads(merged.content)
+    assert body["summary"] == {
+        "total": 3,
+        "pending": 1,
+        "in_progress": 1,
+        "completed": 0,
+        "cancelled": 1,
+    }
+    assert [item["id"] for item in body["todos"]] == ["a", "b", "c"]
+    assert body["todos"][0]["content"] == "draft patch"
+    assert body["todos"][0]["status"] == "in_progress"
+
+
+def test_todo_tool_rejects_bad_payload_and_bounds_injection(tmp_path):
+    from aegis.config import Config
+    from aegis.session import Session
+    from aegis.tools.base import ToolContext
+    from aegis.tools.builtin import TodoWriteTool, active_todo_injection
+
+    session = Session.create()
+    ctx = ToolContext(cwd=tmp_path, config=Config.load(), session=session)
+    tool = TodoWriteTool()
+
+    assert tool.run({"todos": "not json"}, ctx).is_error
+    assert tool.run({"todos": {"content": "bad"}}, ctx).is_error
+
+    long = "x" * 5000
+    res = tool.run({
+        "todos": [
+            {"id": "active", "content": long, "status": "pending"},
+            {"id": "done", "content": "already done", "status": "completed"},
+            {"id": "cancel", "content": "old branch", "status": "cancelled"},
+        ]
+    }, ctx)
+    assert not res.is_error
+    body = json.loads(res.content)
+    assert len(body["todos"][0]["content"]) == 4000
+    assert body["todos"][0]["content"].endswith("[truncated]")
+
+    injected = active_todo_injection(session.todos)
+    assert "active" in injected
+    assert "already done" not in injected
+    assert "old branch" not in injected
 
 
 def test_apply_patch(tmp_path):

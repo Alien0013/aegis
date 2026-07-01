@@ -13,6 +13,9 @@ database (4000+ models) into ~/.aegis/models_cache.json.
 from __future__ import annotations
 
 import json
+import ipaddress
+import re
+from urllib.parse import urlparse
 
 from . import config as cfg
 from .util import read_text
@@ -60,6 +63,16 @@ _CODEX_CONTEXT_FALLBACK: dict[str, int] = {
 
 _cache: dict | None = None
 
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+_CONTAINER_LOCAL_SUFFIXES = (
+    ".local",
+    ".localhost",
+    ".docker.internal",
+    ".podman.internal",
+    ".lima.internal",
+)
+_TAILSCALE_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+
 
 def _cache_path():
     return cfg.sub("models_cache.json")
@@ -94,6 +107,52 @@ def _codex_context_window(model: str) -> int | None:
         if slug in model_lower:
             return ctx
     return None
+
+
+def _normalize_base_url(base_url: str | None) -> str:
+    return str(base_url or "").strip().rstrip("/")
+
+
+def is_local_endpoint(base_url: str | None) -> bool:
+    """Return True for loopback, private-network, container, or mesh-local endpoints."""
+    normalized = _normalize_base_url(base_url)
+    if not normalized:
+        return False
+    url = normalized if "://" in normalized else f"http://{normalized}"
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return False
+    if host in _LOCAL_HOSTS:
+        return True
+    if any(host.endswith(suffix) for suffix in _CONTAINER_LOCAL_SUFFIXES):
+        return True
+    if "." not in host:
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local:
+            return True
+        if isinstance(addr, ipaddress.IPv4Address) and addr in _TAILSCALE_CGNAT:
+            return True
+    except ValueError:
+        pass
+    parts = host.split(".")
+    if len(parts) == 4:
+        try:
+            first, second = int(parts[0]), int(parts[1])
+        except ValueError:
+            return False
+        return (
+            first == 10
+            or (first == 172 and 16 <= second <= 31)
+            or (first == 192 and second == 168)
+            or (first == 100 and 64 <= second <= 127)
+        )
+    return False
 
 
 def _cache_keys(model: str, provider: str | None) -> list[str]:
@@ -190,6 +249,53 @@ def context_window(
     for prefix in sorted(_BUNDLED, key=len, reverse=True):
         if prefix in m:
             return _BUNDLED[prefix]
+    return None
+
+
+def query_ollama_num_ctx(model: str, base_url: str, api_key: str = "") -> int | None:
+    """Return Ollama's runtime context window for ``model`` via ``/api/show``.
+
+    Prefer an explicit Modelfile ``num_ctx`` parameter, then fall back to GGUF
+    ``model_info.*context_length``. Returns ``None`` when the endpoint is not
+    reachable or does not look like Ollama.
+    """
+    import httpx
+
+    model_name = str(model or "").strip()
+    for prefix in ("ollama/", "ollama:", "local:"):
+        if model_name.lower().startswith(prefix):
+            model_name = model_name[len(prefix):]
+            break
+    if not model_name:
+        return None
+    server_url = str(base_url or "").strip().rstrip("/")
+    if server_url.endswith("/v1"):
+        server_url = server_url[:-3]
+    if not server_url:
+        return None
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        with httpx.Client(timeout=3.0, headers=headers) as client:
+            response = client.post(f"{server_url}/api/show", json={"name": model_name})
+        if getattr(response, "status_code", 0) != 200:
+            return None
+        data = response.json()
+    except Exception:  # noqa: BLE001
+        return None
+    params = str(data.get("parameters") or "")
+    for line in params.splitlines():
+        if "num_ctx" not in line:
+            continue
+        match = re.search(r"\bnum_ctx\b\s+(\d+)", line)
+        if match:
+            return int(match.group(1))
+    model_info = data.get("model_info") or {}
+    if isinstance(model_info, dict):
+        for key, value in model_info.items():
+            if "context_length" in str(key) and isinstance(value, (int, float)):
+                return int(value)
     return None
 
 

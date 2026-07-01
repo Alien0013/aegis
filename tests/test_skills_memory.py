@@ -87,6 +87,9 @@ def test_agent_autoloads_relevant_skill_before_turn(tmp_path):
 
     assert 'AEGIS selected the "pytest-helper" skill' in provider.user_messages[-1]
     assert "Run pytest -q before final." in provider.user_messages[-1]
+    user_message = next(m.content for m in agent.session.messages if m.role == "user")
+    assert user_message == "fix this pytest failure in a Python module"
+    assert "pytest-helper" not in user_message
     assert agent.skills.usage()["pytest-helper"]["count"] == 1
 
 
@@ -136,6 +139,9 @@ def test_agent_loads_slash_skill_when_auto_load_disabled(tmp_path):
     assert 'The user invoked the "release-check" skill' in provider.user_messages[-1]
     assert "Check the changelog." in provider.user_messages[-1]
     assert "prepare v1.2" in provider.user_messages[-1]
+    user_message = next(m.content for m in agent.session.messages if m.role == "user")
+    assert user_message == "/release-check prepare v1.2"
+    assert "Check the changelog." not in user_message
 
 
 def test_agent_consumes_pending_skill_preload_bundle(tmp_path):
@@ -189,6 +195,9 @@ def test_agent_consumes_pending_skill_preload_bundle(tmp_path):
     assert "Use visual assets and responsive controls." in prompt
     assert "Drive the task to verified completion." in prompt
     assert "[Missing preloaded skills: build-stack:missing-one]" in prompt
+    user_message = next(m.content for m in agent.session.messages if m.role == "user")
+    assert user_message == "build a polished app"
+    assert "preloaded for this chat" not in user_message
     assert "pending_skill_preload" not in session.meta
     assert session.meta["active_skills"] == ["frontend-design", "ultracode"]
 
@@ -236,6 +245,9 @@ def test_agent_loads_slash_skill_bundle_when_auto_load_disabled(tmp_path):
     assert "one-skill body" in prompt
     assert "two-skill body" in prompt
     assert "ship it" in prompt
+    user_message = next(m.content for m in agent.session.messages if m.role == "user")
+    assert user_message == "/combo ship it"
+    assert "one-skill body" not in user_message
 
 
 def test_skill_activate_includes_directory_and_support_files(tmp_path):
@@ -375,6 +387,286 @@ def test_skill_discovery_refreshes_when_files_change(tmp_path):
     assert sl.discover()["fresh"].description == "discovered after cache."
 
 
+def test_skill_discovery_uses_disk_prompt_snapshot_without_reparsing(tmp_path, monkeypatch):
+    from aegis import config as config_mod
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+    import aegis.skills as skills_mod
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    catalog = tmp_path / "catalog"
+    skill_dir = catalog / "snapshot-skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: snapshot-skill\ndescription: cached from disk.\n---\nbody",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(catalog)]
+    cfg.data["skills"]["include_bundled"] = False
+
+    assert "snapshot-skill" in SkillsLoader(cfg, cwd=workspace).index_block()
+    assert config_mod.sub("skills_prompt_snapshot.json").is_file()
+
+    def fail_parse(_raw: str) -> dict:
+        raise AssertionError("snapshot cache should avoid reparsing SKILL.md")
+
+    monkeypatch.setattr(skills_mod, "_parse_frontmatter", fail_parse)
+    block = SkillsLoader(cfg, cwd=workspace).index_block()
+
+    assert "snapshot-skill" in block
+    assert "cached from disk." in block
+
+
+def test_skill_discovery_snapshot_invalidates_when_skill_file_changes(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    catalog = tmp_path / "catalog"
+    skill_dir = catalog / "changing-skill"
+    skill_dir.mkdir(parents=True)
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(
+        "---\nname: changing-skill\ndescription: old snapshot description.\n---\nbody",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(catalog)]
+    cfg.data["skills"]["include_bundled"] = False
+
+    assert "old snapshot description." in SkillsLoader(cfg, cwd=workspace).index_block()
+
+    skill_file.write_text(
+        "---\n"
+        "name: changing-skill\n"
+        "description: new snapshot description with extra bytes.\n"
+        "---\n"
+        "body\nextra",
+        encoding="utf-8",
+    )
+    block = SkillsLoader(cfg, cwd=workspace).index_block()
+
+    assert "new snapshot description with extra bytes." in block
+    assert "old snapshot description." not in block
+
+
+def test_skill_index_includes_category_description_summary(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    catalog = tmp_path / "catalog"
+    category = catalog / "devops"
+    skill_dir = category / "deploy-helper"
+    skill_dir.mkdir(parents=True)
+    (category / "DESCRIPTION.md").write_text(
+        "---\n"
+        "description: Operational runbooks for shipping and maintaining services.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: deploy-helper\n"
+        "description: Use for deployment checks.\n"
+        "---\n"
+        "body",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(catalog)]
+    cfg.data["skills"]["include_bundled"] = False
+
+    block = SkillsLoader(cfg, cwd=workspace).index_block()
+
+    assert "devops: Operational runbooks for shipping and maintaining services." in block
+    assert "- **deploy-helper**: Use for deployment checks." in block
+
+
+def test_skill_discovery_signature_tracks_category_description_changes(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    catalog = tmp_path / "catalog"
+    category = catalog / "devops"
+    skill_dir = category / "deploy-helper"
+    skill_dir.mkdir(parents=True)
+    desc_file = category / "DESCRIPTION.md"
+    desc_file.write_text(
+        "---\ndescription: Initial category summary.\n---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: deploy-helper\ndescription: Use for deployment checks.\n---\nbody",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(catalog)]
+    cfg.data["skills"]["include_bundled"] = False
+    loader = SkillsLoader(cfg, cwd=workspace)
+
+    before = loader._discovery_signature()
+    desc_file.write_text(
+        "---\ndescription: Updated category summary with extra bytes.\n---\n",
+        encoding="utf-8",
+    )
+
+    assert loader._discovery_signature() != before
+
+
+def test_skill_index_refreshes_when_category_description_changes(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    catalog = tmp_path / "catalog"
+    category = catalog / "devops"
+    skill_dir = category / "deploy-helper"
+    skill_dir.mkdir(parents=True)
+    desc_file = category / "DESCRIPTION.md"
+    desc_file.write_text(
+        "---\ndescription: Initial category summary.\n---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: deploy-helper\ndescription: Use for deployment checks.\n---\nbody",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(catalog)]
+    cfg.data["skills"]["include_bundled"] = False
+
+    assert "devops: Initial category summary." in SkillsLoader(cfg, cwd=workspace).index_block()
+
+    desc_file.write_text(
+        "---\ndescription: Updated category summary with extra bytes.\n---\n",
+        encoding="utf-8",
+    )
+    block = SkillsLoader(cfg, cwd=workspace).index_block()
+
+    assert "devops: Updated category summary with extra bytes." in block
+    assert "Initial category summary." not in block
+
+
+def test_skill_index_prefers_local_category_description_over_external(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    local_category = workspace / "skills" / "devops"
+    external_category = tmp_path / "external" / "devops"
+    skill_dir = external_category / "deploy-helper"
+    local_category.mkdir(parents=True)
+    skill_dir.mkdir(parents=True)
+    (local_category / "DESCRIPTION.md").write_text(
+        "---\ndescription: Local runbook category.\n---\n",
+        encoding="utf-8",
+    )
+    (external_category / "DESCRIPTION.md").write_text(
+        "---\ndescription: External runbook category.\n---\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: deploy-helper\ndescription: Use for deployment checks.\n---\nbody",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(tmp_path / "external")]
+    cfg.data["skills"]["include_bundled"] = False
+
+    block = SkillsLoader(cfg, cwd=workspace).index_block()
+
+    assert "devops: Local runbook category." in block
+    assert "External runbook category." not in block
+    assert "- **deploy-helper**: Use for deployment checks." in block
+
+
+def test_skill_index_limit_keeps_remaining_skill_names_visible(tmp_path, monkeypatch):
+    from aegis.config import Config
+    from aegis.skills import SkillsLoader
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    workspace = tmp_path / "workspace"
+    catalog = tmp_path / "catalog"
+    for name in ("alpha", "beta", "gamma"):
+        skill_dir = catalog / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: {name} description.\n---\nbody",
+            encoding="utf-8",
+        )
+    cfg = Config.load()
+    cfg.data["skills"]["paths"] = [str(catalog)]
+    cfg.data["skills"]["include_bundled"] = False
+    cfg.data["skills"]["index_limit"] = 1
+
+    block = SkillsLoader(cfg, cwd=workspace).index_block()
+
+    assert "- **alpha**: alpha description." in block
+    assert "beta, gamma" in block
+    assert "names only due to skills.index_limit/index_max_chars" in block
+    assert "hidden by skills.index_limit" not in block
+
+
+def test_agent_focus_coding_context_demotes_non_coding_skill_category(tmp_path, monkeypatch):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    class Provider:
+        context_length = 200_000
+        name = "fake"
+        model = "fake-model"
+        api_mode = None
+        auth = None
+
+        def describe(self):
+            return "fake"
+
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    creative = tmp_path / "skills" / "creative" / "story-helper"
+    creative.mkdir(parents=True)
+    (creative / "SKILL.md").write_text(
+        "---\n"
+        "name: story-helper\n"
+        "description: creative writing details should be compacted.\n"
+        "---\n"
+        "body",
+        encoding="utf-8",
+    )
+    coding = tmp_path / "skills" / "software-development" / "code-helper"
+    coding.mkdir(parents=True)
+    (coding / "SKILL.md").write_text(
+        "---\n"
+        "name: code-helper\n"
+        "description: code helper description stays visible.\n"
+        "---\n"
+        "body",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data["skills"]["include_bundled"] = False
+    cfg.data["agent"]["coding_context"] = "focus"
+    agent = Agent(config=cfg, provider=Provider(), session=Session.create(), cwd=tmp_path)
+
+    prompt = agent._build_system_prompt(include_volatile=False)
+
+    assert "- **code-helper**: code helper description stays visible." in prompt
+    assert "- creative [names only]: story-helper" in prompt
+    assert "creative writing details should be compacted." not in prompt
+    assert "Categories marked [names only]" in prompt
+
+
 def test_skill_tool_create_updates_same_turn_prompt_index(tmp_path):
     from aegis.agent.agent import Agent
     from aegis.config import Config
@@ -499,13 +791,14 @@ def test_skill_manage_patch_pin_delete_report(tmp_path):
     assert (cfg.skills_dir() / "patched-skill" / "references" / "deploy-note.md").read_text() == (
         "# Deploy Note\n\nReusable provider quirk."
     )
-    duplicate = tool.run({
+    overwritten = tool.run({
         "action": "write_file",
         "name": "patched-skill",
         "file_path": "references/deploy-note.md",
         "content": "replace me",
-    }, ctx)
-    assert duplicate.is_error
+    }, ctx).data
+    assert overwritten["success"] is True
+    assert (cfg.skills_dir() / "patched-skill" / "references" / "deploy-note.md").read_text() == "replace me"
     escaped = tool.run({
         "action": "write_file",
         "name": "patched-skill",

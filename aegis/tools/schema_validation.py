@@ -8,6 +8,8 @@ doctor/dashboard/CI paths without pulling in a full JSON Schema package.
 
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +46,7 @@ _SCHEMA_KEYS = {
     "title",
     "type",
 }
+_MISSING = object()
 
 
 @dataclass
@@ -190,6 +193,103 @@ def _validate_json_schema(
         else:
             for name, child in defs.items():
                 _validate_json_schema(tool, source, child, f"{path}.$defs.{name}", issues, root_defs=root_defs)
+
+
+def _schema_declared_types(schema: dict[str, Any]) -> list[str]:
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str):
+        return [schema_type]
+    if isinstance(schema_type, list):
+        return [item for item in schema_type if isinstance(item, str)]
+    types: list[str] = []
+    for union_key in ("anyOf", "oneOf"):
+        variants = schema.get(union_key)
+        if not isinstance(variants, list):
+            continue
+        for variant in variants:
+            if isinstance(variant, dict):
+                types.extend(_schema_declared_types(variant))
+    return types
+
+
+def _schema_allows_null(schema: dict[str, Any]) -> bool:
+    if schema.get("nullable") is True:
+        return True
+    return "null" in _schema_declared_types(schema)
+
+
+def _coerce_json_string(value: str, expected_type: type) -> Any:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return _MISSING
+    if isinstance(parsed, expected_type):
+        return parsed
+    return _MISSING
+
+
+def _coerce_string_for_type(value: str, schema_type: str) -> Any:
+    if schema_type == "integer":
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return _MISSING
+        if not math.isfinite(number) or number != int(number):
+            return _MISSING
+        return int(number)
+    if schema_type == "number":
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return _MISSING
+        if not math.isfinite(number):
+            return _MISSING
+        return int(number) if number == int(number) else number
+    if schema_type == "boolean":
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+        return _MISSING
+    if schema_type == "array":
+        return _coerce_json_string(value, list)
+    if schema_type == "object":
+        return _coerce_json_string(value, dict)
+    if schema_type == "null" and value.strip().lower() == "null":
+        return None
+    return _MISSING
+
+
+def _coerce_value_for_schema(value: Any, schema: Any) -> Any:
+    if not isinstance(schema, dict):
+        return value
+    declared_types = _schema_declared_types(schema)
+    if isinstance(value, str):
+        if _schema_allows_null(schema) and value.strip().lower() == "null":
+            return None
+        for schema_type in declared_types:
+            coerced = _coerce_string_for_type(value, schema_type)
+            if coerced is not _MISSING:
+                return coerced
+    if "array" in declared_types and "string" not in declared_types:
+        if value is not None and not isinstance(value, (list, tuple)):
+            return [value]
+    return value
+
+
+def coerce_tool_arguments(args: dict[str, Any], parameters_schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of tool arguments adjusted to simple JSON Schema property types."""
+    coerced = dict(args)
+    if not isinstance(parameters_schema, dict):
+        return coerced
+    properties = parameters_schema.get("properties")
+    if not isinstance(properties, dict):
+        return coerced
+    for name, prop_schema in properties.items():
+        if name in coerced:
+            coerced[name] = _coerce_value_for_schema(coerced[name], prop_schema)
+    return coerced
 
 
 def validate_tool_schema(tool: Tool) -> list[ToolSchemaIssue]:

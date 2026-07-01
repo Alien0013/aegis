@@ -121,12 +121,12 @@ def _test_function_count() -> int:
 
 def test_public_site_counts_match_generated_repo_facts():
     content = (ROOT / "site-next" / "lib" / "content.ts").read_text(encoding="utf-8")
-    assert '{ label: "Registered tools", value: "126"' in content
+    assert '{ label: "Registered tools", value: "128"' in content
     assert '{ label: "Bundled skills", value: "71"' in content
     assert '{ label: "Test functions", value: "1,750+"' in content
-    assert _markdown_table_rows(ROOT / "docs/tools-reference.md") == 126
+    assert _markdown_table_rows(ROOT / "docs/tools-reference.md") == 128
     assert _test_function_count() >= 1750
-    assert "126 registered tools" in (ROOT / "docs/tools.md").read_text(encoding="utf-8")
+    assert "128 registered tools" in (ROOT / "docs/tools.md").read_text(encoding="utf-8")
 
 
 def test_public_site_docs_hrefs_are_backed_by_next_route_or_mkdocs_file():

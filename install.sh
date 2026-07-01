@@ -19,6 +19,9 @@
 #   AEGIS_DRY_RUN      print the install plan without making changes (default 0)
 #   AEGIS_BRANCH       branch for the default GitHub source (default main)
 #   AEGIS_SKIP_BROWSER skip Playwright Chromium install for full/browser profiles
+#   AEGIS_MANIFEST     print installer stage manifest and exit (default 0)
+#   AEGIS_STAGE        run one installer stage by name and exit
+#   AEGIS_JSON         print machine-readable stage result JSON (default 0)
 set -euo pipefail
 
 if [ -n "${PYTHONPATH:-}" ]; then
@@ -49,11 +52,17 @@ PYTHON_OVERRIDE="${AEGIS_PYTHON:-}"
 ONBOARD_ARGS="${AEGIS_ONBOARD_ARGS:-}"
 INSTALL_TOOLSETS="${AEGIS_TOOLSETS:-}"
 INSTALL_SKILLS="${AEGIS_SKILLS:-}"
+MANIFEST_MODE="${AEGIS_MANIFEST:-0}"
+STAGE_NAME="${AEGIS_STAGE:-}"
+JSON_OUTPUT="${AEGIS_JSON:-0}"
 STAGE=0
 TOTAL_STAGES=8
 BROWSER_STATUS="not selected"
 ONBOARD_FAILED=0
 ONBOARD_RC=0
+SCRIPT_DIR=""
+PYTHON=""
+SOURCE=""
 
 say()  { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m✓\033[0m %s\n' "$*"; }
@@ -152,6 +161,9 @@ Options:
   --skip-browser, --no-browser  Skip Playwright Chromium download
   --verify                      Run 'aegis doctor' after install
   --dry-run                     Print the install plan without changing files
+  --manifest                    Print installer stage manifest as JSON
+  --stage <name>                Run one installer stage
+  --json                        Print machine-readable stage result JSON
   --branch <name>               Install default GitHub source from branch
   -h, --help                    Show this help
 EOF
@@ -189,6 +201,300 @@ check_network() {
   fi
 }
 
+json_escape() {
+  printf '%s' "$1" | tr '\n' ' ' | sed \
+    -e 's/\\/\\\\/g' \
+    -e 's/"/\\"/g'
+}
+
+emit_manifest() {
+  printf '%s\n' '{"protocol_version":1,"product":"aegis","stages":[{"name":"prepare","title":"Prepare environment","category":"runtime","needs_user_input":false},{"name":"venv","title":"Create Python virtual environment","category":"runtime","needs_user_input":false},{"name":"package","title":"Install Python package","category":"runtime","needs_user_input":false},{"name":"browser","title":"Install browser engine","category":"runtime","needs_user_input":false},{"name":"launcher","title":"Install command launcher","category":"runtime","needs_user_input":false},{"name":"tools","title":"Check PATH and optional tools","category":"runtime","needs_user_input":false},{"name":"setup","title":"Run first-run setup","category":"configuration","needs_user_input":true},{"name":"verify","title":"Verify installation","category":"runtime","needs_user_input":false},{"name":"complete","title":"Print completion summary","category":"runtime","needs_user_input":false}]}'
+}
+
+stage_needs_user_input() {
+  case "$1" in
+    setup|onboard) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+emit_stage_json() {
+  local stage_name="$1"
+  local ok_value="$2"
+  local skipped_value="${3:-false}"
+  local reason="${4:-}"
+  local escaped
+  escaped="$(json_escape "$reason")"
+  if [ -n "$escaped" ]; then
+    printf '{"ok":%s,"stage":"%s","skipped":%s,"reason":"%s"}\n' "$ok_value" "$stage_name" "$skipped_value" "$escaped"
+  else
+    printf '{"ok":%s,"stage":"%s","skipped":%s}\n' "$ok_value" "$stage_name" "$skipped_value"
+  fi
+}
+
+select_python() {
+  say "Looking for Python >= 3.10..."
+  PYTHON=""
+  if [ -n "$PYTHON_OVERRIDE" ]; then
+    if command -v "$PYTHON_OVERRIDE" >/dev/null 2>&1 || [ -x "$PYTHON_OVERRIDE" ]; then
+      if "$PYTHON_OVERRIDE" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+        PYTHON="$PYTHON_OVERRIDE"
+      fi
+    fi
+  else
+    for cand in python3.13 python3.12 python3.11 python3.10 python3 python; do
+      if command -v "$cand" >/dev/null 2>&1; then
+        if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+          PYTHON="$cand"; break
+        fi
+      fi
+    done
+  fi
+  [ -n "$PYTHON" ] || die "Python 3.10+ not found. Install it (e.g. 'brew install python' or 'apt install python3') and re-run."
+  ok "Using $("$PYTHON" --version) ($(command -v "$PYTHON"))"
+}
+
+resolve_source() {
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/scripts/lib/node-bootstrap.sh" ]; then
+    # shellcheck source=scripts/lib/node-bootstrap.sh
+    . "$SCRIPT_DIR/scripts/lib/node-bootstrap.sh"
+    if wants_browser; then
+      ensure_node || true
+    fi
+  fi
+  local extras_applied=0
+  if [ -n "$REPO" ]; then
+    SOURCE="git+$REPO"
+  elif [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ]; then
+    SOURCE="$SCRIPT_DIR"
+  else
+    local pkg_spec="$PACKAGE"
+    [ -n "$EXTRAS" ] && pkg_spec="$pkg_spec[$EXTRAS]"
+    SOURCE="$pkg_spec @ git+https://github.com/Alien0013/aegis.git@$BRANCH"
+    extras_applied=1
+  fi
+  [ -n "$EXTRAS" ] && [ "$extras_applied" = "0" ] && SOURCE="${SOURCE}[${EXTRAS}]"
+  say "Install source: $SOURCE"
+}
+
+install_venv() {
+  say "Creating venv at $INSTALL_DIR..."
+  mkdir -p "$INSTALL_DIR"
+  "$PYTHON" -m venv "$INSTALL_DIR"
+  "$INSTALL_DIR/bin/pip" install -q --upgrade pip wheel
+}
+
+install_package() {
+  say "Installing AEGIS (this can take a minute)..."
+  "$INSTALL_DIR/bin/pip" install -q --upgrade --force-reinstall --no-cache-dir "$SOURCE"
+  ok "Installed."
+}
+
+install_browser_engine() {
+  if wants_browser; then
+    if [ "$SKIP_BROWSER" = "1" ]; then
+      BROWSER_STATUS="skipped"
+      warn "Browser engine skipped. Run '$INSTALL_DIR/bin/python -m playwright install chromium' later."
+    else
+      say "Installing Playwright Chromium..."
+      if "$INSTALL_DIR/bin/python" -m playwright install chromium; then
+        BROWSER_STATUS="installed"
+        ok "Browser engine installed."
+      else
+        BROWSER_STATUS="failed"
+        warn "Browser engine install failed; browser tools may not work yet."
+        warn "Try later: $INSTALL_DIR/bin/python -m playwright install chromium"
+      fi
+    fi
+  else
+    BROWSER_STATUS="not selected"
+    warn "Browser engine skipped (core/browser extra not selected)."
+  fi
+}
+
+install_launcher() {
+  mkdir -p "$BIN_DIR"
+  rm -f "$BIN_DIR/$APP"
+  cat > "$BIN_DIR/$APP" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$(if [ "${AEGIS_HOME:-}" ]; then printf 'export AEGIS_HOME=%q\n' "$AEGIS_HOME_DIR"; fi)
+exec "$INSTALL_DIR/bin/$APP" "\$@"
+EOF
+  chmod +x "$BIN_DIR/$APP"
+  ok "Installed launcher $BIN_DIR/$APP -> $INSTALL_DIR/bin/$APP"
+}
+
+check_path_and_optional_tools() {
+  hash -r 2>/dev/null || true
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *)
+      warn "$BIN_DIR is not on your PATH."
+      for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+        [ -f "$rc" ] || continue
+        if ! grep -qs "$BIN_DIR" "$rc"; then
+          printf '\n# added by AEGIS installer\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$rc"
+          ok "Added $BIN_DIR to PATH in $rc"
+        fi
+      done
+      warn "Run 'export PATH=\"$BIN_DIR:\$PATH\"' or restart your shell to use 'aegis'."
+      ;;
+  esac
+
+  if ! command -v rg >/dev/null 2>&1; then
+    if   [ "$IS_TERMUX" = 1 ] && command -v pkg >/dev/null 2>&1; then pkg install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
+    elif command -v brew   >/dev/null 2>&1; then brew install ripgrep   >/dev/null 2>&1 && ok "installed ripgrep" || true
+    elif command -v apt-get>/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then apt-get install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || warn "skip ripgrep (optional)"
+    elif command -v apt-get>/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then sudo apt-get install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || warn "skip ripgrep (optional)"
+    elif command -v dnf    >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then dnf install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
+    elif command -v dnf    >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then sudo dnf install -y ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
+    elif command -v pacman >/dev/null 2>&1 && [ "$(id -u)" -eq 0 ]; then pacman -S --noconfirm ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
+    elif command -v pacman >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then sudo pacman -S --noconfirm ripgrep >/dev/null 2>&1 && ok "installed ripgrep" || true
+    else warn "ripgrep not found; install it later for faster file search"
+    fi
+  fi
+}
+
+run_onboarding() {
+  if [ "$RUN_ONBOARD" != "0" ] && { has_tty || [ "$NONINTERACTIVE_ONBOARD" = "1" ]; }; then
+    say "Starting first-run onboarding..."
+    local run_args="$ONBOARD_ARGS"
+    if [ -n "$INSTALL_TOOLSETS" ]; then
+      run_args="$run_args --toolsets $INSTALL_TOOLSETS"
+    fi
+    if [ -n "$INSTALL_SKILLS" ]; then
+      run_args="$run_args --skills $INSTALL_SKILLS"
+    fi
+    if [ "$NONINTERACTIVE_ONBOARD" = "1" ]; then
+      run_args="$run_args --non-interactive --accept-risk --json"
+    fi
+    local onboard_rc
+    if [ "$NONINTERACTIVE_ONBOARD" = "1" ]; then
+      if "$BIN_DIR/$APP" onboard $run_args; then
+        onboard_rc=0
+      else
+        onboard_rc=$?
+      fi
+    else
+      if "$BIN_DIR/$APP" onboard $run_args < /dev/tty; then
+        onboard_rc=0
+      else
+        onboard_rc=$?
+      fi
+    fi
+    if [ "$onboard_rc" = "0" ]; then
+      ok "Onboarding complete."
+      echo "  Ways to use AEGIS:"
+      echo "    aegis                       # chat in the terminal"
+      echo "    aegis ui                    # clickable web control panel"
+      echo "    aegis desktop               # native desktop app"
+    else
+      ONBOARD_FAILED=1
+      ONBOARD_RC="$onboard_rc"
+      warn "Onboarding did not finish. Run 'aegis setup' when ready."
+    fi
+  else
+    warn "Onboarding skipped. Run 'aegis setup' when ready."
+    echo "  Next:"
+    echo "    aegis setup                 # first-run onboarding"
+    echo "    aegis                       # start chatting (terminal)"
+    echo "    aegis ui                    # clickable control panel in your browser"
+    echo "    aegis desktop               # native desktop app"
+    echo "    aegis doctor                # verify the install"
+    if wants_browser && [ "$BROWSER_STATUS" != "installed" ]; then
+      echo "    playwright install chromium # if you installed the 'browser'/'all' extra"
+    fi
+  fi
+}
+
+run_verify() {
+  if [ "$VERIFY_INSTALL" = "1" ]; then
+    say "Running install verify..."
+    "$BIN_DIR/$APP" doctor
+    ok "Install verify complete."
+  else
+    warn "Verify skipped. Run 'aegis doctor' to check the install."
+  fi
+}
+
+run_stage_body() {
+  case "$1" in
+    prepare|prerequisites)
+      banner
+      stage "Preparing environment"
+      select_python
+      resolve_source
+      check_network
+      print_plan
+      ;;
+    venv)
+      [ -n "$PYTHON" ] || select_python
+      install_venv
+      ;;
+    package)
+      [ -n "$PYTHON" ] || select_python
+      [ -n "$SOURCE" ] || resolve_source
+      install_package
+      ;;
+    browser)
+      install_browser_engine
+      ;;
+    launcher)
+      install_launcher
+      ;;
+    tools)
+      check_path_and_optional_tools
+      ;;
+    setup|onboard)
+      run_onboarding
+      ;;
+    verify)
+      run_verify
+      ;;
+    complete)
+      print_success
+      ;;
+    *)
+      warn "Unknown installer stage: $1"
+      return 2
+      ;;
+  esac
+}
+
+run_stage_protocol() {
+  local stage_name="$1"
+  if [ -z "$stage_name" ]; then
+    warn "--stage requires a stage name"
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      emit_stage_json "" false false "missing stage name"
+    fi
+    return 2
+  fi
+  if [ "$NONINTERACTIVE_ONBOARD" = "1" ] && stage_needs_user_input "$stage_name"; then
+    warn "Skipping $stage_name (noninteractive stage run)"
+    if [ "$JSON_OUTPUT" = "1" ]; then
+      emit_stage_json "$stage_name" true true
+    fi
+    return 0
+  fi
+
+  set +e
+  run_stage_body "$stage_name"
+  local code=$?
+  set -e
+  if [ "$JSON_OUTPUT" = "1" ]; then
+    if [ "$code" -eq 0 ]; then
+      emit_stage_json "$stage_name" true false
+    else
+      emit_stage_json "$stage_name" false false "exit code $code"
+    fi
+  fi
+  return "$code"
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --skip-onboard|--no-onboard)
@@ -216,6 +522,13 @@ while [ $# -gt 0 ]; do
       VERIFY_INSTALL=1; shift ;;
     --dry-run)
       DRY_RUN=1; shift ;;
+    --manifest)
+      MANIFEST_MODE=1; shift ;;
+    --stage)
+      [ $# -ge 2 ] || die "missing value for --stage"
+      STAGE_NAME="$2"; shift 2 ;;
+    --json)
+      JSON_OUTPUT=1; shift ;;
     --branch)
       [ $# -ge 2 ] || die "missing value for --branch"
       BRANCH="$2"; shift 2 ;;
@@ -244,6 +557,16 @@ IS_TERMUX=""
 if [ -n "${PREFIX:-}" ] && printf '%s' "$PREFIX" | grep -q "com.termux"; then
   IS_TERMUX=1
   BIN_DIR="${AEGIS_BIN_DIR:-$PREFIX/bin}"
+fi
+
+if [ "$MANIFEST_MODE" = "1" ]; then
+  emit_manifest
+  exit 0
+fi
+
+if [ -n "$STAGE_NAME" ]; then
+  run_stage_protocol "$STAGE_NAME"
+  exit $?
 fi
 
 banner

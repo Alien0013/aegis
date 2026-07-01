@@ -67,6 +67,7 @@ def test_session_read_and_scroll_include_runtime_metadata():
         "runtime": {"busy_mode": "steer"},
         "last_trace_id": "trace_session",
         "last_run_id": "run_session",
+        "turn_id": "turn_session_current",
         "last_turn_id": "turn_session",
         "response_state": {"previous_response_id": "resp_session"},
         "resume_pending": True,
@@ -85,6 +86,7 @@ def test_session_read_and_scroll_include_runtime_metadata():
     assert read_meta["runtime"] == {"busy_mode": "steer"}
     assert read_meta["last_trace_id"] == "trace_session"
     assert read_meta["last_run_id"] == "run_session"
+    assert read_meta["turn_id"] == "turn_session_current"
     assert read_meta["last_turn_id"] == "turn_session"
     assert read_meta["response_state"]["previous_response_id"] == "resp_session"
     assert read_meta["resume_pending"] is True

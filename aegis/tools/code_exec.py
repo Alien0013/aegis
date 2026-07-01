@@ -103,8 +103,13 @@ class _RpcServer:
         if not allowed:
             return {"is_error": True, "content": f"permission denied: {reason}"}
         try:
-            res = tool.run(args, self.ctx)
-            return {"is_error": res.is_error, "content": res.content}
+            from .async_bridge import run_sync_awaitable
+
+            res = run_sync_awaitable(tool.run(args, self.ctx))
+            return {
+                "is_error": bool(getattr(res, "is_error", False)),
+                "content": getattr(res, "content", str(res)),
+            }
         except Exception as e:  # noqa: BLE001
             return {"is_error": True, "content": f"{type(e).__name__}: {e}"}
 
@@ -126,6 +131,7 @@ class ExecuteCodeTool(Tool):
         "(set tools.terminal_backend=docker for isolation)."
     )
     groups = ["runtime"]
+    extra_toolsets = ["code_execution"]
     parameters = {
         "type": "object",
         "properties": {

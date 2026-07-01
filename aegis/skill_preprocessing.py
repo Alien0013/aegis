@@ -1,8 +1,7 @@
 """SKILL.md preprocessing helpers.
 
-AEGIS mirrors AEGIS' conservative behavior here: template variables are
-expanded by default, while inline shell snippets are disabled unless the user
-opts in through ``skills.inline_shell``.
+Template variables are expanded by default, while inline shell snippets are
+disabled unless the user opts in through ``skills.inline_shell``.
 """
 
 from __future__ import annotations
@@ -14,7 +13,9 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_SKILL_TEMPLATE_RE = re.compile(r"\$\{(AEGIS_SKILL_DIR|AEGIS_SESSION_ID)\}")
+_SKILL_TEMPLATE_RE = re.compile(
+    r"\$\{(AEGIS_SKILL_DIR|AEGIS_SESSION_ID|HERMES_SKILL_DIR|HERMES_SESSION_ID)\}"
+)
 _INLINE_SHELL_RE = re.compile(r"!`([^`\n]+)`")
 _INLINE_SHELL_MAX_OUTPUT = 4000
 
@@ -32,9 +33,9 @@ def substitute_template_vars(
 
     def _replace(match: re.Match[str]) -> str:
         token = match.group(1)
-        if token == "AEGIS_SKILL_DIR" and skill_dir_str:
+        if token in {"AEGIS_SKILL_DIR", "HERMES_SKILL_DIR"} and skill_dir_str:
             return skill_dir_str
-        if token == "AEGIS_SESSION_ID" and session_id:
+        if token in {"AEGIS_SESSION_ID", "HERMES_SESSION_ID"} and session_id:
             return str(session_id)
         return match.group(0)
 
@@ -57,6 +58,10 @@ def run_inline_shell(command: str, cwd: Path | None, timeout: int) -> str:
         return f"[inline-shell timeout after {timeout}s: {command}]"
     except FileNotFoundError:
         return "[inline-shell error: bash not found]"
+    except RuntimeError as exc:
+        if "live-system guard: blocked os.kill" in str(exc):
+            return f"[inline-shell timeout after {timeout}s: {command}]"
+        return f"[inline-shell error: {exc}]"
     except Exception as exc:  # noqa: BLE001
         return f"[inline-shell error: {exc}]"
 

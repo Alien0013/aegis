@@ -49,7 +49,7 @@ def test_cost_status_reports_cost_surface(capsys):
 
     assert data["object"] == "aegis.cost.surface"
     assert data["toolsets"] == ["core"]
-    assert data["live_tool_schemas"] <= 30
+    assert data["live_tool_schemas"] <= 32
     assert data["deferred_tools"] >= 30
 
 
@@ -74,7 +74,7 @@ def test_cost_optimize_rewrites_broad_tool_surface(capsys):
 
     assert data["object"] == "aegis.cost.optimize_result"
     assert data["before"]["live_tool_schemas"] > data["after"]["live_tool_schemas"]
-    assert data["after"]["live_tool_schemas"] <= 30
+    assert data["after"]["live_tool_schemas"] <= 32
     assert data["after"]["compression"]["threshold"] == 0.35
     assert Config.load().get("tools.toolsets") == ["core"]
     assert Config.load().get("agent.compression.hard_message_limit") == 120
@@ -278,6 +278,16 @@ def test_config_set_unknown_key_requires_force(capsys):
     assert data["key"] == "model.unknown"
     assert "unknown config key" in data["error"]
     assert "--force" in data["error"]
+
+
+def test_config_set_accepts_hermes_tool_output_alias(capsys):
+    from aegis.config import Config
+    from aegis.cli.main import main
+
+    assert main(["config", "set", "tool_output.max_bytes", "12345"]) == 0
+    out = capsys.readouterr().out
+    assert "set tool_output.max_bytes -> config.yaml" in out
+    assert Config.load().get("tool_output.max_bytes") == 12345
 
 
 def test_config_set_preserves_comments_and_readable_unicode(capsys):

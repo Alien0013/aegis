@@ -36,6 +36,7 @@ class BgTask:
     message_id: str = ""
     cancel_requested: bool = False
     retry_of: str = ""
+    observability: dict[str, Any] = field(default_factory=dict)
 
 
 class BackgroundCapacityError(RuntimeError):
@@ -61,6 +62,20 @@ def _positive_config_int(config: Any, dotted: str) -> int:
     except (TypeError, ValueError):
         return 0
     return value if value > 0 else 0
+
+
+def _task_observability(task: BgTask) -> dict[str, Any]:
+    observability = getattr(task, "observability", {})
+    return dict(observability) if isinstance(observability, dict) else {}
+
+
+def _surface_result_observability(result: Any) -> dict[str, Any]:
+    try:
+        from .tools.agentic import _subagent_observability
+
+        return _subagent_observability(result)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 class BackgroundManager:
@@ -228,21 +243,29 @@ class BackgroundManager:
         )
 
     def _record_completion(self, task: BgTask, config: Any) -> None:
+        duration = round((task.finished_at or time.time()) - (task.started_at or task.created_at), 2)
         event = {
             "type": "subagent_done",
             "id": task.id,
+            "delegation_id": task.id,
+            "session_key": task.parent_session_id,
+            "goal": task.prompt,
             "status": task.status,
             "background": True,
             "agent_type": task.agent_type,
+            "role": task.role,
+            "model": task.model,
             "run_id": task.run_id,
             "parent_session_id": task.parent_session_id,
             "prompt": task.prompt[:200],
             "result": task.result[:8000],
             "error": task.error[:1000],
+            "duration_seconds": duration,
             "created_at": task.created_at,
             "started_at": task.started_at,
             "finished_at": task.finished_at,
         }
+        event.update(_task_observability(task))
         with self._lock:
             self._completion_events.append(event)
             self._completion_events = self._completion_events[-200:]
@@ -282,6 +305,7 @@ class BackgroundManager:
             "thread_id": task.thread_id,
             "message_id": task.message_id,
         }
+        event.update(_task_observability(task))
         try:
             process_registry.completion_queue.put(event)
         except Exception:  # noqa: BLE001
@@ -386,6 +410,7 @@ class BackgroundManager:
                 runner = None
                 with self._lock:
                     task.result = result.text or ""
+                    task.observability = _surface_result_observability(result)
                     if task.cancel_requested:
                         task.status = "cancelled"
                         task.error = task.error or "cancel requested"
@@ -496,13 +521,17 @@ class BackgroundManager:
     def list(self) -> list[dict]:
         with self._lock:
             return [{"id": t.id, "status": t.status, "prompt": t.prompt[:60],
+                     "delegation_id": t.id, "session_key": t.parent_session_id,
                      "result_preview": (t.result or t.error)[:80], "run_id": t.run_id,
                      "agent_type": t.agent_type, "parent_session_id": t.parent_session_id,
+                     "role": t.role, "model": t.model,
                      "created_at": t.created_at, "started_at": t.started_at,
                      "finished_at": t.finished_at, "cancel_requested": t.cancel_requested,
                      "retry_of": t.retry_of, "error": t.error[:500],
                      "platform": t.platform, "chat_id": t.chat_id,
-                     "thread_id": t.thread_id, "message_id": t.message_id}
+                     "thread_id": t.thread_id, "message_id": t.message_id,
+                     "interruptible": t.status in {"running", "cancelling"},
+                     **_task_observability(t)}
                     for t in self._tasks.values()]
 
     def get(self, task_id: str) -> BgTask | None:

@@ -145,12 +145,39 @@ def test_mcp_schema_normalization_and_safe_names():
     )
 
     assert tool.name == "mcp__my_server__submit_form"
+    assert tool.toolset == "mcp-my_server"
+    assert tool.metadata()["toolset"] == "mcp-my_server"
     assert tool.parameters["properties"]["payload"]["$ref"] == "#/$defs/Payload"
     assert "$defs" in tool.parameters
     assert "definitions" not in tool.parameters
     assert tool.parameters["required"] == ["payload"]
     assert tool.parameters["properties"]["optional"]["nullable"] is True
     assert tool.parameters["properties"]["nested"]["required"] == ["kept"]
+
+
+def test_mcp_tools_use_per_server_toolsets_with_mcp_compatibility():
+    from aegis.mcp.client import MCPClient, MCPGetPromptTool, MCPReadResourceTool, MCPTool
+    from aegis.tools.registry import ToolRegistry
+
+    client = MCPClient("docs-server")
+    tools = [
+        MCPTool(client, {"name": "search", "description": "Search", "inputSchema": {}}),
+        MCPReadResourceTool(client, [{"uri": "note://a", "name": "Note A"}]),
+        MCPGetPromptTool(client, [{"name": "review", "description": "Review"}]),
+    ]
+    registry = ToolRegistry()
+    registry.register_all(tools)
+
+    names = sorted(tool.name for tool in tools)
+    assert {tool.toolset for tool in tools} == {"mcp-docs_server"}
+    assert {tool.metadata()["toolset"] for tool in tools} == {"mcp-docs_server"}
+    assert registry.toolset_names(display_aliases=False) == ["core", "mcp-docs_server"]
+    assert registry.toolset_names() == ["core", "docs-server"]
+    assert registry.resolve_toolsets(["docs-server"]) == ["mcp-docs_server"]
+    assert registry.resolve_toolsets(["mcp"]) == ["mcp-docs_server"]
+    assert registry.get_tool_names_for_toolset("mcp") == names
+    assert sorted(tool.name for tool in registry.available(["docs-server"])) == names
+    assert sorted(tool.name for tool in registry.available(["mcp"])) == names
 
 
 def test_mcp_call_preserves_structured_and_image_content(tmp_path, monkeypatch):

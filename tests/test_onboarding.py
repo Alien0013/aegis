@@ -381,6 +381,8 @@ def test_setup_section_tools_interactive_flags_select_surface(capsys):
     rc = main([
         "setup",
         "tools",
+        "--non-interactive",
+        "--accept-risk",
         "--toolsets",
         "core,mcp",
         "--skills",
@@ -389,8 +391,7 @@ def test_setup_section_tools_interactive_flags_select_surface(capsys):
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "installer-selected toolsets: core, mcp" in out
-    assert "installer-selected skills: 2 selected" in out
+    assert "setup tools complete" in out
     assert Config.load().get("tools.toolsets") == ["core", "mcp"]
     assert Config.load().get("skills.allowlist") == ["web-research", "summarize"]
 

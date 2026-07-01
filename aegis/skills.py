@@ -16,15 +16,18 @@ Discovery precedence (higher tier shadows same-named lower tier):
 
 from __future__ import annotations
 
+from collections import OrderedDict
+import json
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 from . import config as cfg
-from .util import read_text
+from .util import atomic_write, read_text
 
 SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SKILL_USER_TASK_MARKER = "The user task for this skill invocation is:"
@@ -66,6 +69,10 @@ TOKEN_STOPWORDS = {
     "on", "or", "our", "please", "task", "that", "the", "this", "to", "use",
     "using", "we", "when", "with", "you", "your",
 }
+SKILLS_PROMPT_SNAPSHOT_VERSION = 3
+_SKILLS_INDEX_CACHE_MAX = 8
+_SKILLS_INDEX_CACHE: OrderedDict[tuple, str] = OrderedDict()
+_SKILLS_INDEX_CACHE_LOCK = threading.Lock()
 
 
 def validate_skill_name(name: str) -> str:
@@ -119,6 +126,10 @@ def _positive_int(value) -> int:
     return out if out > 0 else 0
 
 
+def _category_root(category: str) -> str:
+    return str(category or "general").strip().lower().split("/", 1)[0]
+
+
 def resolve_skill_relative_path(skill_dir: Path, rel: str) -> Path:
     candidate = Path(str(rel or ""))
     if candidate.is_absolute():
@@ -138,6 +149,7 @@ class Skill:
     name: str
     description: str
     path: Path                       # the SKILL.md file
+    category: str = "general"
     metadata: dict = field(default_factory=dict)
     requires: dict = field(default_factory=dict)
     allowed_tools: list[str] | None = None
@@ -265,11 +277,13 @@ def _skill_matches_platform(skill: Skill) -> bool:
 
 
 class SkillsLoader:
-    def __init__(self, config: cfg.Config, cwd: Path | None = None):
+    def __init__(self, config: cfg.Config, cwd: Path | None = None, session_id: str | None = None):
         self.config = config
         self.cwd = cwd or Path.cwd()
+        self.session_id = str(session_id or "")
         self._cache: dict[str, Skill] | None = None
         self._cache_signature: tuple | None = None
+        self._category_descriptions: dict[str, str] = {}
 
     def _search_paths(self) -> list[tuple[int, Path]]:
         paths: list[tuple[int, Path]] = [
@@ -301,14 +315,78 @@ class SkillsLoader:
                 dirs[:] = []
         return sorted(set(files), key=lambda p: str(p))
 
+    def _skill_category(self, base: Path, skill_md: Path) -> str:
+        try:
+            parts = skill_md.relative_to(base).parts
+        except ValueError:
+            return "general"
+        if len(parts) > 2:
+            return "/".join(parts[:-2])
+        if len(parts) == 2:
+            return parts[0]
+        return "general"
+
+    def _description_files(self, base: Path) -> list[Path]:
+        if not base.exists():
+            return []
+        files: list[Path] = []
+        root_description = base / "DESCRIPTION.md"
+        if root_description.is_file():
+            files.append(root_description)
+        for root, dirs, names in os.walk(base, followlinks=False):
+            dirs[:] = sorted(
+                d for d in dirs
+                if d not in EXCLUDED_DISCOVERY_DIRS and not d.startswith(".aegis-archive")
+            )
+            desc_file = Path(root) / "DESCRIPTION.md"
+            if "DESCRIPTION.md" in names and desc_file != root_description:
+                files.append(desc_file)
+            if "SKILL.md" in names:
+                dirs[:] = []
+        return sorted(set(files), key=lambda p: str(p))
+
+    def _description_category(self, base: Path, desc_file: Path) -> str:
+        try:
+            parts = desc_file.relative_to(base).parts
+        except ValueError:
+            return "general"
+        if len(parts) > 1:
+            return "/".join(parts[:-1])
+        return "general"
+
+    def _category_descriptions_for_base(self, base: Path) -> dict[str, str]:
+        descriptions: dict[str, str] = {}
+        for desc_file in self._description_files(base):
+            try:
+                fm = _parse_frontmatter(read_text(desc_file))
+            except Exception:  # noqa: BLE001
+                continue
+            desc = str(fm.get("description") or "").strip().strip("'\"")
+            if desc:
+                descriptions[self._description_category(base, desc_file)] = desc
+        return descriptions
+
     def discover(self) -> dict[str, Skill]:
         signature = self._discovery_signature()
         if self._cache is not None and self._cache_signature == signature:
             return self._cache
+        snapshot = self._load_prompt_snapshot(signature)
+        if snapshot is not None:
+            self._cache = snapshot
+            self._cache_signature = signature
+            return snapshot
         found: dict[str, Skill] = {}
+        category_descriptions: dict[str, str] = {}
+        category_description_tiers: dict[str, int] = {}
         for tier, base in self._search_paths():
             if not base.exists():
                 continue
+            for category, description in self._category_descriptions_for_base(base).items():
+                existing_tier = category_description_tiers.get(category)
+                if existing_tier is not None and existing_tier <= tier:
+                    continue
+                category_descriptions[category] = description
+                category_description_tiers[category] = tier
             for skill_md in self._skill_files(base):
                 raw = read_text(skill_md)
                 fm = _parse_frontmatter(raw)
@@ -324,6 +402,7 @@ class SkillsLoader:
                     name=name,
                     description=desc,
                     path=skill_md,
+                    category=self._skill_category(base, skill_md),
                     metadata=fm.get("metadata", {}) or {},
                     requires=fm.get("requires", {}) or {},
                     allowed_tools=_skill_allowed_tools(fm),
@@ -332,8 +411,10 @@ class SkillsLoader:
                     environments=_skill_environments(fm),
                     tier=tier,
                 )
+        self._category_descriptions = category_descriptions
         self._cache = found
         self._cache_signature = signature
+        self._write_prompt_snapshot(signature, found)
         return found
 
     def is_stale(self) -> bool:
@@ -356,7 +437,109 @@ class SkillsLoader:
                 except OSError:
                     continue
                 entries.append((str(skill_md), int(stat.st_mtime_ns), int(stat.st_size)))
+            for desc_file in self._description_files(base):
+                try:
+                    stat = desc_file.stat()
+                except OSError:
+                    continue
+                entries.append((str(desc_file), int(stat.st_mtime_ns), int(stat.st_size)))
         return tuple(entries)
+
+    def _prompt_snapshot_path(self) -> Path:
+        return cfg.sub("skills_prompt_snapshot.json")
+
+    def _load_prompt_snapshot(self, signature: tuple) -> dict[str, Skill] | None:
+        try:
+            payload = json.loads(read_text(self._prompt_snapshot_path()))
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("version") != SKILLS_PROMPT_SNAPSHOT_VERSION:
+            return None
+        if payload.get("signature") != self._signature_payload(signature):
+            return None
+        skills_payload = payload.get("skills")
+        if not isinstance(skills_payload, list):
+            return None
+        found: dict[str, Skill] = {}
+        for row in skills_payload:
+            skill = self._skill_from_snapshot(row)
+            if skill is None:
+                return None
+            found[skill.name] = skill
+        descriptions = payload.get("category_descriptions")
+        if isinstance(descriptions, dict):
+            self._category_descriptions = {
+                str(category): str(description)
+                for category, description in descriptions.items()
+                if str(category).strip() and str(description).strip()
+            }
+        else:
+            self._category_descriptions = {}
+        return found
+
+    def _write_prompt_snapshot(self, signature: tuple, skills: dict[str, Skill]) -> None:
+        payload = {
+            "version": SKILLS_PROMPT_SNAPSHOT_VERSION,
+            "signature": self._signature_payload(signature),
+            "category_descriptions": dict(sorted(self._category_descriptions.items())),
+            "skills": [
+                self._skill_to_snapshot(skill)
+                for skill in sorted(skills.values(), key=lambda item: item.name)
+            ],
+        }
+        try:
+            atomic_write(self._prompt_snapshot_path(), json.dumps(payload, indent=2, sort_keys=True))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _signature_payload(self, signature: tuple) -> list[list]:
+        return [[str(path), int(mtime), int(size)] for path, mtime, size in signature]
+
+    def _skill_to_snapshot(self, skill: Skill) -> dict:
+        return {
+            "name": skill.name,
+            "description": skill.description,
+            "path": str(skill.path),
+            "category": skill.category,
+            "metadata": skill.metadata,
+            "requires": skill.requires,
+            "allowed_tools": skill.allowed_tools,
+            "toolsets": skill.toolsets,
+            "platforms": skill.platforms,
+            "environments": skill.environments,
+            "tier": skill.tier,
+        }
+
+    def _skill_from_snapshot(self, row) -> Skill | None:
+        if not isinstance(row, dict):
+            return None
+        name = str(row.get("name") or "").strip()
+        description = str(row.get("description") or "").strip()
+        path = str(row.get("path") or "").strip()
+        if not name or not description or not path:
+            return None
+        try:
+            tier = int(row.get("tier", 4) or 4)
+        except (TypeError, ValueError):
+            tier = 4
+        allowed_tools = row.get("allowed_tools")
+        if allowed_tools is not None and not isinstance(allowed_tools, list):
+            allowed_tools = _as_str_list(allowed_tools)
+        return Skill(
+            name=name,
+            description=description,
+            path=Path(path),
+            category=str(row.get("category") or "general").strip() or "general",
+            metadata=row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
+            requires=row.get("requires") if isinstance(row.get("requires"), dict) else {},
+            allowed_tools=allowed_tools,
+            toolsets=_as_str_list(row.get("toolsets")),
+            platforms=_as_str_list(row.get("platforms")),
+            environments=_as_str_list(row.get("environments")),
+            tier=tier,
+        )
 
     def _policy_reason(self, skill: Skill) -> str:
         disabled = {
@@ -427,6 +610,40 @@ class SkillsLoader:
             if missing:
                 return False, "missing toolset " + ", ".join(missing)
         return True, ""
+
+    def _index_block_cache_key(
+        self,
+        all_skills: dict[str, Skill],
+        compact_roots: set[str],
+    ) -> tuple:
+        import shutil
+
+        env_names = sorted({
+            str(env)
+            for skill in all_skills.values()
+            for env in _as_str_list((skill.requires or {}).get("env"))
+        })
+        bin_names = sorted({
+            str(name)
+            for skill in all_skills.values()
+            for name in _as_str_list((skill.requires or {}).get("bins"))
+        })
+        return (
+            self._cache_signature or self._discovery_signature(),
+            tuple(sorted(str(path) for _tier, path in self._search_paths())),
+            tuple(sorted(_skill_command_name(s) for s in self.config.get("skills.disabled", []) or [])),
+            tuple(sorted(_skill_command_name(s) for s in self.config.get("skills.allowlist", []) or [])),
+            tuple(sorted(_skill_command_name(s) for s in self.config.get("tools.toolsets", []) or [])),
+            _positive_int(self.config.get("skills.index_limit", 0)),
+            _positive_int(self.config.get("skills.index_max_chars", 0)),
+            tuple(sorted(compact_roots)),
+            _current_platform_name(),
+            os.environ.get("AEGIS_KANBAN_TASK", ""),
+            os.environ.get("AEGIS_KANBAN_BOARD", ""),
+            tuple((name, os.environ.get(name, "")) for name in env_names),
+            tuple((name, shutil.which(name) or "") for name in bin_names),
+            tuple(sorted(self._category_descriptions.items())),
+        )
 
     def available(self) -> list[Skill]:
         return [s for s in self.discover().values() if self._enabled(s)[0]]
@@ -534,14 +751,38 @@ class SkillsLoader:
                 remaining -= len(block) + 2
         return "\n\n".join(blocks), loaded, missing
 
-    def index_block(self) -> str:
-        skills = self.available()
+    def index_block(self, *, compact_categories: set[str] | frozenset[str] | None = None) -> str:
+        all_skills = self.discover()
+        compact_roots = {
+            str(category).strip().lower()
+            for category in (compact_categories or set())
+            if str(category).strip()
+        }
+        cache_key = self._index_block_cache_key(all_skills, compact_roots)
+        with _SKILLS_INDEX_CACHE_LOCK:
+            cached = _SKILLS_INDEX_CACHE.get(cache_key)
+            if cached is not None:
+                _SKILLS_INDEX_CACHE.move_to_end(cache_key)
+                return cached
+        skills = [s for s in all_skills.values() if self._enabled(s)[0]]
         if not skills:
-            return ""
-        total = len(skills)
+            result = ""
+            with _SKILLS_INDEX_CACHE_LOCK:
+                _SKILLS_INDEX_CACHE[cache_key] = result
+                _SKILLS_INDEX_CACHE.move_to_end(cache_key)
+                while len(_SKILLS_INDEX_CACHE) > _SKILLS_INDEX_CACHE_MAX:
+                    _SKILLS_INDEX_CACHE.popitem(last=False)
+            return result
         limit = _positive_int(self.config.get("skills.index_limit", 0))
         max_chars = _positive_int(self.config.get("skills.index_max_chars", 0))
-        selected = sorted(skills, key=lambda s: s.name)
+        demoted_by_category: dict[str, list[Skill]] = {}
+        visible_skills: list[Skill] = []
+        for skill in sorted(skills, key=lambda s: (s.category, s.name)):
+            if compact_roots and _category_root(skill.category) in compact_roots:
+                demoted_by_category.setdefault(skill.category or "general", []).append(skill)
+            else:
+                visible_skills.append(skill)
+        selected = list(visible_skills)
         clipped_by_limit = False
         clipped_by_chars = False
         if limit and len(selected) > limit:
@@ -549,26 +790,64 @@ class SkillsLoader:
             clipped_by_limit = True
         lines: list[str] = []
         used_chars = 0
+        listed_names: set[str] = set()
+        category_descriptions = self._category_descriptions or {}
+        current_category = ""
         for skill in selected:
+            category = skill.category or "general"
+            if category != current_category:
+                current_category = category
+                category_description = category_descriptions.get(category, "")
+                if category_description:
+                    category_line = f"{category}: {category_description}"
+                    if max_chars and lines and used_chars + len(category_line) + 1 > max_chars:
+                        clipped_by_chars = True
+                        break
+                    lines.append(category_line)
+                    used_chars += len(category_line) + 1
             line = skill.metadata_summary()
             if max_chars and lines and used_chars + len(line) + 1 > max_chars:
                 clipped_by_chars = True
                 break
             lines.append(line)
+            listed_names.add(skill.name)
             used_chars += len(line) + 1
-        hidden = max(0, total - len(lines))
+        names_only = [
+            skill.name
+            for skill in sorted(visible_skills, key=lambda s: s.name)
+            if skill.name not in listed_names
+        ]
         if clipped_by_limit or clipped_by_chars:
+            suffix = ": " + ", ".join(names_only) if names_only else ""
             lines.append(
-                f"- ... {hidden} more skill(s) hidden by skills.index_limit/index_max_chars; "
+                f"- [names only due to skills.index_limit/index_max_chars]{suffix}; "
                 "call `skill` with action=list to inspect them."
             )
-        return ("# Available skills\n"
-                "Before acting, scan this list. If any skill is even partially relevant, "
-                "you MUST load it or rely on an AEGIS-preloaded skill body already present "
-                "in the user turn. Err on the side of loading; only skip skills when none "
-                "are genuinely relevant. To load manually, call the `skill` tool with "
-                "action=view.\n"
-                + "\n".join(lines))
+        for category in sorted(demoted_by_category):
+            names = sorted({skill.name for skill in demoted_by_category[category]})
+            if names:
+                lines.append(f"- {category} [names only]: {', '.join(names)}")
+        demotion_note = ""
+        if demoted_by_category:
+            demotion_note = (
+                "\n\nCategories marked [names only] are outside the current coding "
+                "context, so their descriptions are omitted; load them normally with "
+                "the `skill` tool when relevant."
+            )
+        result = ("# Available skills\n"
+                  "Before acting, scan this list. If any skill is even partially relevant, "
+                  "you MUST load it or rely on an AEGIS-preloaded skill body already present "
+                  "in the user turn. Err on the side of loading; only skip skills when none "
+                  "are genuinely relevant. To load manually, call the `skill` tool with "
+                  "action=view.\n"
+                  + "\n".join(lines)
+                  + demotion_note)
+        with _SKILLS_INDEX_CACHE_LOCK:
+            _SKILLS_INDEX_CACHE[cache_key] = result
+            _SKILLS_INDEX_CACHE.move_to_end(cache_key)
+            while len(_SKILLS_INDEX_CACHE) > _SKILLS_INDEX_CACHE_MAX:
+                _SKILLS_INDEX_CACHE.popitem(last=False)
+        return result
 
     def _supporting_files(self, skill: Skill) -> list[str]:
         files: list[str] = []
@@ -597,6 +876,7 @@ class SkillsLoader:
             body = preprocess_skill_content(
                 body,
                 skill.dir,
+                session_id=self.session_id or None,
                 skills_cfg=self.config.get("skills", {}) or {},
             )
         except Exception:  # noqa: BLE001
@@ -831,3 +1111,6 @@ class SkillsLoader:
     def invalidate(self) -> None:
         self._cache = None
         self._cache_signature = None
+        self._category_descriptions = {}
+        with _SKILLS_INDEX_CACHE_LOCK:
+            _SKILLS_INDEX_CACHE.clear()

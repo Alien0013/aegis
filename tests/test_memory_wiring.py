@@ -98,7 +98,7 @@ def test_message_refresh_mode_remembers_fact_saved_on_previous_turn(tmp_path, mo
     config = _cfg(tmp_path, monkeypatch)
     config.data["memory"]["refresh"] = "message"
     from aegis.agent.agent import Agent
-    from aegis.agent.loop import run_conversation
+    from aegis.agent.loop import _provider_wire_messages, run_conversation
 
     agent = Agent.create(config)
     agent.ensure_system_prompt()                          # turn 1 builds the prompt
@@ -109,7 +109,9 @@ def test_message_refresh_mode_remembers_fact_saved_on_previous_turn(tmp_path, mo
     # next turn: simulate the top of run_conversation's refresh-on-stale check
     if agent.memory.is_stale():
         agent.refresh_volatile()
-    assert "TJ" in agent.session.messages[0].content      # the bot now remembers
+    assert "TJ" not in agent.session.messages[0].content  # volatile memory is provider-wire only
+    wire_system = _provider_wire_messages(agent, agent.session.messages)[0].content
+    assert "TJ" in wire_system                            # the bot now remembers on the API copy
     assert run_conversation is not None                   # import sanity
 
 

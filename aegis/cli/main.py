@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
+from ..bootstrap import apply_startup_bootstrap
+
+apply_startup_bootstrap()
+
 import argparse
 import copy
 import difflib
@@ -16,6 +22,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .. import __version__
 from .. import config as cfg
@@ -526,6 +533,18 @@ def _auth_config_pools(config: Config) -> dict:
     return pools if isinstance(pools, dict) else {}
 
 
+def _print_auth_removal_details(result) -> None:
+    pool_count = int(getattr(result, "removed_pool_entries", 0) or 0)
+    suppressed = list(getattr(result, "suppressed_sources", []) or [])
+    hints = list(getattr(result, "hints", []) or [])
+    if pool_count:
+        _print(f"  removed {pool_count} pooled credential(s)")
+    if suppressed:
+        _print("  suppressed source(s): " + ", ".join(redact_secrets(str(s)) for s in suppressed))
+    for hint in hints:
+        _print("  hint: " + redact_secrets(str(hint)))
+
+
 def _cmd_auth_list(args, config: Config, store) -> int:
     provider = str(getattr(args, "provider", "") or "").strip()
     pools = config.get("credential_pools", {}) or {}
@@ -629,11 +648,16 @@ def _cmd_auth_remove(args, config: Config, store) -> int:
         _print(f"removed credential #{remove_index + 1} from {provider}")
         return 0
 
-    store.delete(provider)
+    result = store.delete(provider)
+    config_removed = provider in pools
     pools.pop(provider, None)
     config.save()
     credentials.reset_provider_state(provider)
-    _print(f"removed stored auth for {provider}")
+    if result.removed or result.suppressed_sources or config_removed:
+        _print(f"removed stored auth for {provider}")
+        _print_auth_removal_details(result)
+    else:
+        _print(f"no stored auth found for {provider}")
     return 0
 
 
@@ -714,8 +738,9 @@ def cmd_auth(args, config: Config) -> int:
     if action == "logout":
         if not args.provider:
             return _die("usage: aegis auth logout <provider>")
-        store.delete(args.provider)
+        result = store.delete(args.provider)
         _print(f"logged out of {args.provider}.")
+        _print_auth_removal_details(result)
         return 0
     if action == "import-claude":
         from ..providers.auth import import_claude_cli_login
@@ -730,8 +755,16 @@ def cmd_auth(args, config: Config) -> int:
 # --------------------------------------------------------------------------- #
 # setup wizard
 # --------------------------------------------------------------------------- #
+def _interactive_setup_stdio() -> bool:
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
 def cmd_setup(args, config: Config) -> int:
     from ..onboarding import (
+        print_noninteractive_setup_guidance,
         run_onboarding,
         run_onboarding_noninteractive,
         run_setup_section,
@@ -774,6 +807,10 @@ def cmd_setup(args, config: Config) -> int:
             services=getattr(args, "install_services", False)
             and not getattr(args, "no_services", False),
         )
+    if not _interactive_setup_stdio():
+        reason = "setup section requires an interactive terminal" if section else "setup wizard requires an interactive terminal"
+        print_noninteractive_setup_guidance(reason, output_func=_print)
+        return 2
     if section:
         return run_setup_section(
             config,
@@ -804,6 +841,32 @@ def cmd_skills(args, config: Config) -> int:
     from ..skills import SkillsLoader
 
     loader = SkillsLoader(config)
+    review_actions = {"pending", "approve", "apply", "reject", "deny", "drop", "approval", "mode"}
+    if args.action in review_actions:
+        from .. import write_approval as wa
+        from ..write_approval_review import handle_pending_subcommand
+
+        review_args = [args.action]
+        if args.name:
+            review_args.append(args.name)
+        if args.target:
+            review_args.append(args.target)
+        out = handle_pending_subcommand(
+            wa.SKILLS,
+            review_args,
+            config=config,
+            skills_loader=loader,
+            set_mode_fn=lambda enabled: config.set("skills.write_approval", enabled),
+        )
+        _print(out or "Unknown skills approval subcommand.")
+        return 0
+    if args.action == "diff":
+        from .. import write_approval as wa
+        from ..write_approval_review import handle_pending_subcommand
+
+        if args.name and wa.get_pending(wa.SKILLS, args.name, config=config):
+            _print(handle_pending_subcommand(wa.SKILLS, ["diff", args.name], config=config, skills_loader=loader))
+            return 0
     if args.action == "view":
         body = loader.activate(args.name) if args.name else None
         _print(body or f"skill '{args.name}' not found.")
@@ -1152,9 +1215,344 @@ def cmd_skills(args, config: Config) -> int:
     return 0
 
 
-def cmd_mcp(args, config: Config) -> int:
-    from ..mcp.client import build_manager
+_MCP_ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+_MCP_PRESETS: dict[str, dict[str, object]] = {
+    "codex": {
+        "command": "codex",
+        "args": ["mcp-server"],
+    },
+}
+
+_MCP_SHELL_INTERPRETERS = frozenset({
+    "bash",
+    "sh",
+    "zsh",
+    "dash",
+    "fish",
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+})
+_MCP_EGRESS_PATTERN = re.compile(
+    r"(?<![\w.-])(?:curl|wget|nc|ncat|socat)(?![\w.-])"
+    r"|/dev/tcp/"
+    r"|\bInvoke-WebRequest\b"
+    r"|\bInvoke-RestMethod\b"
+    r"|\bSystem\.Net\.WebClient\b",
+    re.IGNORECASE,
+)
+_MCP_EXFIL_HINT_PATTERN = re.compile(
+    r"\.env\b|--data-binary|--data-raw|\b-X\s+POST\b|\bPOST\b|<\s*[^\s]+",
+    re.IGNORECASE,
+)
+_MCP_PERSISTENCE_PATTERN = re.compile(
+    r"authorized_keys"
+    r"|\.ssh/"
+    r"|/etc/ssh\b"
+    r"|/etc/pam\.d\b|pam_[\w-]+\.so"
+    r"|/etc/sudoers"
+    r"|/etc/cron|crontab\b"
+    r"|/etc/rc\.local|/etc/systemd"
+    r"|\.bashrc\b|\.bash_profile\b|\.profile\b|\.zshrc\b",
+    re.IGNORECASE,
+)
+_MCP_IOC_SUBSTRINGS = (
+    "AAAAC3NzaC1lZDI1NTE5AAAAICBoh1oDC4DnsO1m5mJ4yfEKrQebaFh",
+    "hermes-0day",
+    "60.165.167.",
+    "118.182.244.156",
+    "61.178.123.196",
+)
+
+
+def _mcp_flatten_env_args(raw_env: object) -> list[object]:
+    values: list[object] = []
+    for item in raw_env or []:
+        if isinstance(item, (list, tuple)):
+            values.extend(item)
+        else:
+            values.append(item)
+    return values
+
+
+def _mcp_parse_env_assignments(raw_env: object) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for item in _mcp_flatten_env_args(raw_env):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if "=" not in text:
+            raise ValueError(f"Invalid --env value '{text}' (expected KEY=VALUE)")
+        key, value = text.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid --env value '{text}' (missing variable name)")
+        if not _MCP_ENV_VAR_NAME_RE.match(key):
+            raise ValueError(f"Invalid --env variable name '{key}'")
+        parsed[key] = value
+    return parsed
+
+
+def _mcp_split_command_line(value: object) -> tuple[str, list[str]]:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("MCP stdio command cannot be empty")
+    try:
+        parts = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid MCP command line: {exc}") from exc
+    if not parts:
+        raise ValueError("MCP stdio command cannot be empty")
+    return parts[0], parts[1:]
+
+
+def _mcp_normalize_command(value: object, cmd_args: list[str]) -> tuple[str | None, list[str]]:
+    text = str(value or "").strip()
+    if not text:
+        return None, cmd_args
+    try:
+        parts = shlex.split(text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid --command value: {exc}") from exc
+    if not parts:
+        return None, cmd_args
+    if len(parts) > 1 and not cmd_args:
+        return parts[0], parts[1:]
+    return text, cmd_args
+
+
+def _mcp_validate_url(name: str, value: object) -> str | None:
+    if value is None:
+        return None
+    url = str(value or "").strip()
+    if not url:
+        raise ValueError(f"MCP server '{name}' has an empty url")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError(f"MCP server '{name}' url scheme must be http or https")
+    if not parsed.hostname:
+        raise ValueError(f"MCP server '{name}' url is missing host")
+    return url
+
+
+def _mcp_apply_preset(
+    *,
+    preset_name: str | None,
+    url: str | None,
+    command: str | None,
+    cmd_args: list[str],
+    server_config: dict[str, object],
+) -> tuple[str | None, str | None, list[str]]:
+    if not preset_name:
+        return url, command, cmd_args
+    preset = _MCP_PRESETS.get(preset_name)
+    if not preset:
+        raise ValueError(f"Unknown MCP preset: {preset_name}")
+    if url or command:
+        return url, command, cmd_args
+    url_value = preset.get("url")
+    command_value = preset.get("command")
+    preset_args = list(preset.get("args") or [])
+    url = str(url_value).strip() if url_value else None
+    command = str(command_value).strip() if command_value else None
+    cmd_args = [str(part) for part in preset_args]
+    if url:
+        server_config["url"] = url
+    if command:
+        server_config["command"] = command
+    if cmd_args:
+        server_config["args"] = cmd_args
+    return url, command, cmd_args
+
+
+def _mcp_command_basename(command: object) -> str:
+    text = str(command or "").strip()
+    if not text:
+        return ""
+    try:
+        parts = shlex.split(text, posix=(os.name != "nt"))
+    except ValueError:
+        parts = text.split()
+    first = parts[0] if parts else text
+    return os.path.basename(first).lower()
+
+
+def _mcp_inline_script(args: object) -> str:
+    if args is None:
+        return ""
+    if isinstance(args, (list, tuple)):
+        return " ".join(str(item) for item in args)
+    return str(args)
+
+
+def _mcp_entry_text(entry: dict[str, object]) -> str:
+    parts = [str(entry.get("command") or ""), _mcp_inline_script(entry.get("args"))]
+    env = entry.get("env")
+    if isinstance(env, dict):
+        parts.extend(str(value) for value in env.values())
+    return " ".join(parts)
+
+
+def _mcp_validate_server_entry(name: str, entry: dict[str, object]) -> list[str]:
+    issues: list[str] = []
+    flat = _mcp_entry_text(entry)
+    for ioc in _MCP_IOC_SUBSTRINGS:
+        if ioc in flat:
+            return [
+                f"MCP server '{name}' contains a known hermes-0day "
+                f"indicator-of-compromise ('{ioc}')"
+            ]
+
+    command = entry.get("command")
+    if _mcp_command_basename(command) not in _MCP_SHELL_INTERPRETERS:
+        return issues
+    script = _mcp_inline_script(entry.get("args"))
+    if not script:
+        return issues
+    if _MCP_EGRESS_PATTERN.search(script):
+        issue = f"MCP server '{name}' uses shell interpreter '{command}' with network egress in args"
+        if _MCP_EXFIL_HINT_PATTERN.search(script):
+            issue += " and exfiltration-shaped arguments"
+        issues.append(issue)
+    if _MCP_PERSISTENCE_PATTERN.search(script):
+        issues.append(
+            f"MCP server '{name}' uses shell interpreter '{command}' to write "
+            "to an OS persistence surface (SSH keys / PAM / sudoers / cron / "
+            "shell rc); this is the hermes-0day backdoor shape, not a real MCP server"
+        )
+    return issues
+
+
+def _mcp_stdio_is_interactive() -> bool:
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _mcp_confirm_overwrite(name: str) -> bool:
+    try:
+        value = input(f"Server '{name}' already exists. Overwrite? [y/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return False
+    return value in {"y", "yes"}
+
+
+def _mcp_spec_declares_oauth(spec: dict) -> bool:
+    return bool(spec.get("oauth")) or str(spec.get("auth") or "").lower() == "oauth"
+
+
+def _mcp_login_one(
+    name: str,
+    spec: dict,
+    *,
+    manual: bool,
+    action_label: str,
+    allow_non_oauth: bool,
+) -> int:
+    if not _mcp_spec_declares_oauth(spec):
+        if allow_non_oauth:
+            _print(f"MCP server '{name}' does not declare OAuth; no login required")
+            return 0
+        return _die(f"MCP server '{name}' is not configured for OAuth")
+    server_url = str(spec.get("url") or "").strip()
+    if not server_url:
+        return _die(f"MCP server '{name}' OAuth {action_label} requires an HTTP URL")
+    try:
+        from ..mcp.oauth_manager import get_mcp_oauth_manager
+
+        creds = get_mcp_oauth_manager().login(
+            name,
+            server_url,
+            spec,
+            manual=manual,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _die(str(exc))
+    suffix = "refresh token saved" if creds.get("refresh_token") else "access token saved"
+    _print(f"MCP server '{name}' OAuth {action_label} complete ({suffix})")
+    return 0
+
+
+def _mcp_transport_label(spec: dict) -> str:
+    if spec.get("url"):
+        transport = str(spec.get("url") or "")
+    elif spec.get("command"):
+        args = spec.get("args") or []
+        preview = ""
+        if isinstance(args, list) and args:
+            preview = " " + " ".join(str(part) for part in args[:2])
+        transport = f"{spec.get('command')}{preview}"
+    else:
+        transport = "?"
+    return transport[:27] + "..." if len(transport) > 30 else transport
+
+
+def _mcp_tools_label(spec: dict) -> str:
+    raw_filter = spec.get("tool_filter")
+    filter_spec = raw_filter if isinstance(raw_filter, dict) else {}
+    include = filter_spec.get("include")
+    exclude = filter_spec.get("exclude")
+    if include and isinstance(include, list):
+        return f"{len(include)} selected"
+    if exclude and isinstance(exclude, list):
+        return f"-{len(exclude)} excluded"
+    return "all"
+
+
+def _mcp_status_label(spec: dict) -> str:
+    enabled = spec.get("enabled", True)
+    if isinstance(enabled, str):
+        enabled = enabled.lower() in {"true", "1", "yes", "on"}
+    return "enabled" if enabled else "disabled"
+
+
+def _mcp_confirm_remove(name: str) -> bool:
+    try:
+        interactive = bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        interactive = False
+    if not interactive:
+        return True
+    try:
+        value = input(f"Remove MCP server '{name}'? [Y/n]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return True
+    return not value or value in {"y", "yes"}
+
+
+def _mcp_available_hint(servers: dict) -> None:
+    names = sorted(str(name) for name in servers)
+    if names:
+        _print("Available MCP servers: " + ", ".join(names))
+
+
+def _mcp_print_test_header(name: str, spec: dict) -> None:
+    _print(f"Testing MCP server '{name}'...")
+    if spec.get("url"):
+        _print(f"  Transport: HTTP -> {spec.get('url')}")
+    else:
+        args = spec.get("args") or []
+        suffix = f" {' '.join(str(part) for part in args)}" if isinstance(args, list) and args else ""
+        _print(f"  Transport: stdio -> {spec.get('command', '?')}{suffix}")
+    headers = spec.get("headers")
+    if _mcp_spec_declares_oauth(spec):
+        _print("  Auth: OAuth 2.1 PKCE")
+    elif isinstance(headers, dict) and headers:
+        _print("  Auth: headers")
+        for key, value in headers.items():
+            _print(f"    {key}: {redact_secrets(str(value))}")
+    else:
+        _print("  Auth: none")
+
+
+def cmd_mcp(args, config: Config) -> int:
     if args.action == "configure":
         if not args.name:
             return _die("usage: aegis mcp configure <name> [--include a,b|--exclude a,b|--all]")
@@ -1162,11 +1560,16 @@ def cmd_mcp(args, config: Config) -> int:
         spec = dict(servers.get(args.name) or {})
         if not spec:
             return _die(f"MCP server '{args.name}' not found")
+        issues = _mcp_validate_server_entry(args.name, spec)
+        if issues:
+            for issue in issues:
+                _print(f"warning: {issue}")
+            return _die(f"MCP server '{args.name}' was not configured due to suspicious configuration")
         if getattr(args, "all", False):
             spec.pop("tool_filter", None)
-        elif getattr(args, "include", None):
+        elif getattr(args, "include", None) is not None:
             spec["tool_filter"] = {"include": [s.strip() for s in args.include.split(",") if s.strip()]}
-        elif getattr(args, "exclude", None):
+        elif getattr(args, "exclude", None) is not None:
             spec["tool_filter"] = {"exclude": [s.strip() for s in args.exclude.split(",") if s.strip()]}
         else:
             raw_filter = spec.get("tool_filter")
@@ -1180,6 +1583,43 @@ def cmd_mcp(args, config: Config) -> int:
         config.save()
         _print(f"configured MCP server '{args.name}'")
         return 0
+    if args.action == "tools" and args.name:
+        from ..mcp.client import save_tool_checklist, tool_checklist
+
+        if getattr(args, "include", None) is not None:
+            include = [s.strip() for s in args.include.split(",") if s.strip()]
+            try:
+                spec = save_tool_checklist(config, args.name, include)
+            except KeyError:
+                return _die(f"MCP server '{args.name}' not found")
+            selected = len(spec.get("tool_filter", {}).get("include", []))
+            _print(f"saved MCP tool checklist for '{args.name}' ({selected} selected)")
+        elif getattr(args, "all", False):
+            servers = dict(config.get("mcp.servers", {}) or {})
+            spec = dict(servers.get(args.name) or {})
+            if not spec:
+                return _die(f"MCP server '{args.name}' not found")
+            spec.pop("tool_filter", None)
+            servers[args.name] = spec
+            config.data.setdefault("mcp", {})["servers"] = servers
+            config.save()
+            _print(f"cleared MCP tool checklist for '{args.name}'")
+
+        try:
+            checklist = tool_checklist(config, args.name)
+        except KeyError:
+            return _die(f"MCP server '{args.name}' not found")
+        if not checklist.get("ok"):
+            _print(f"{args.name}: ERROR: {checklist.get('error') or 'probe failed'}")
+            return 1
+        items = checklist.get("items", []) or []
+        selected = sum(1 for item in items if item.get("selected"))
+        _print(f"{args.name}: {checklist.get('transport', '?')} tools {selected}/{len(items)} selected")
+        for item in items:
+            marker = "[x]" if item.get("selected") else "[ ]"
+            desc = str(item.get("description", ""))[:90]
+            _print(f"  {marker} {item.get('name', ''):<24} {desc}")
+        return 0
     if args.action == "login":
         if not args.name:
             return _die("usage: aegis mcp login <name>")
@@ -1187,11 +1627,53 @@ def cmd_mcp(args, config: Config) -> int:
         spec = servers.get(args.name)
         if not isinstance(spec, dict):
             return _die(f"MCP server '{args.name}' not found")
-        if not spec.get("oauth"):
-            _print(f"MCP server '{args.name}' does not declare OAuth; no login required")
-            return 0
-        _print(f"MCP server '{args.name}' declares OAuth; configure credentials in mcp.servers.{args.name}.oauth")
-        return 0
+        return _mcp_login_one(
+            args.name,
+            spec,
+            manual=bool(getattr(args, "manual", False)),
+            action_label="login",
+            allow_non_oauth=True,
+        )
+    if args.action == "reauth":
+        servers = dict(config.get("mcp.servers", {}) or {})
+        if getattr(args, "all", False):
+            oauth_servers = [
+                (name, spec)
+                for name, spec in sorted(servers.items())
+                if isinstance(spec, dict)
+                and _mcp_spec_declares_oauth(spec)
+                and str(spec.get("url") or "").strip()
+            ]
+            if not oauth_servers:
+                _print("No OAuth-based MCP servers found in config.")
+                return 0
+            _print(f"Re-authenticating {len(oauth_servers)} OAuth MCP server(s) one at a time...")
+            succeeded = 0
+            for name, spec in oauth_servers:
+                _print(f"-- {name} --")
+                rc = _mcp_login_one(
+                    name,
+                    spec,
+                    manual=bool(getattr(args, "manual", False)),
+                    action_label="reauth",
+                    allow_non_oauth=False,
+                )
+                if rc == 0:
+                    succeeded += 1
+            _print(f"Re-authenticated {succeeded}/{len(oauth_servers)} MCP server(s)")
+            return 0 if succeeded == len(oauth_servers) else 1
+        if not args.name:
+            return _die("usage: aegis mcp reauth <name> | --all")
+        spec = servers.get(args.name)
+        if not isinstance(spec, dict):
+            return _die(f"MCP server '{args.name}' not found")
+        return _mcp_login_one(
+            args.name,
+            spec,
+            manual=bool(getattr(args, "manual", False)),
+            action_label="reauth",
+            allow_non_oauth=False,
+        )
     if args.action == "picker":
         servers = config.get("mcp.servers", {}) or {}
         _print("installed MCP servers:")
@@ -1237,23 +1719,165 @@ def cmd_mcp(args, config: Config) -> int:
         run_mcp_server(config)
         return 0
     if args.action == "add":
-        if not args.name or not args.cmd:
-            return _die('usage: aegis mcp add <name> "<command> [args...]"')
+        name = str(args.name or "").strip()
+        if not name:
+            return _die("usage: aegis mcp add <name> [--url URL | --command CMD | --preset NAME]")
+        raw_args = list(getattr(args, "mcp_args", None) or [])
+        if raw_args and raw_args[0] == "--":
+            raw_args = raw_args[1:]
+        cmd_args = [str(part) for part in raw_args]
+        url = getattr(args, "url", None)
+        command = getattr(args, "mcp_command", None)
+        legacy_cmd = getattr(args, "cmd", None)
+        preset_name = getattr(args, "preset", None)
+        auth_type = getattr(args, "auth", None)
+
+        try:
+            explicit_env = _mcp_parse_env_assignments(getattr(args, "env", None))
+            if legacy_cmd and any(value for value in (url, command, preset_name)):
+                raise ValueError("Do not combine positional MCP command with --url, --command, or --preset")
+            if legacy_cmd:
+                if cmd_args:
+                    raise ValueError("Do not combine positional MCP command with --args; use --command with --args")
+                command, cmd_args = _mcp_split_command_line(legacy_cmd)
+            else:
+                command, cmd_args = _mcp_normalize_command(command, cmd_args)
+            url = _mcp_validate_url(name, url)
+            server_config: dict[str, object] = {}
+            url, command, cmd_args = _mcp_apply_preset(
+                preset_name=preset_name,
+                url=url,
+                command=command,
+                cmd_args=cmd_args,
+                server_config=server_config,
+            )
+        except ValueError as exc:
+            return _die(str(exc))
+
+        if url and command:
+            return _die("Specify only one of --url or --command for an MCP server")
+        if url and explicit_env:
+            return _die("--env is only supported for stdio MCP servers (--command or stdio presets)")
+        if not url and not command:
+            return _die("Must specify --url <endpoint>, --command <cmd>, positional command, or --preset <name>")
+        if auth_type and not url:
+            return _die("--auth is only supported for HTTP MCP servers (--url)")
+        if auth_type == "header":
+            return _die(f"--auth header cannot be configured offline; add headers under mcp.servers.{name}.headers")
+
+        if url:
+            server_config["url"] = url
+            if auth_type == "oauth":
+                server_config["auth"] = "oauth"
+        else:
+            server_config["command"] = command
+            if cmd_args:
+                server_config["args"] = cmd_args
+            if explicit_env:
+                server_config["env"] = explicit_env
+
+        issues = _mcp_validate_server_entry(name, server_config)
+        if issues:
+            for issue in issues:
+                _print(f"warning: {issue}")
+            return _die(f"MCP server '{name}' was not saved due to suspicious configuration")
+
         servers = dict(config.get("mcp.servers", {}) or {})
-        parts = args.cmd.split()
-        servers[args.name] = {"command": parts[0], "args": parts[1:]}
+        if name in servers and not getattr(args, "force", False):
+            if not _mcp_stdio_is_interactive():
+                return _die(f"MCP server '{name}' already exists; use --force to overwrite")
+            if not _mcp_confirm_overwrite(name):
+                _print("Cancelled.")
+                return 0
+        servers[name] = server_config
         config.data.setdefault("mcp", {})["servers"] = servers
         config.save()
-        _print(f"added MCP server '{args.name}'")
+        _print(f"added MCP server '{name}' (saved offline; run `aegis mcp test {name}` to probe)")
+        if auth_type == "oauth":
+            _print(f"  OAuth marked required; run `aegis mcp login {name}` if the server requires login.")
         return 0
     if args.action == "remove":
+        if not args.name:
+            return _die("usage: aegis mcp remove <name>")
         servers = dict(config.get("mcp.servers", {}) or {})
+        spec = servers.get(args.name)
+        if not isinstance(spec, dict):
+            _mcp_available_hint(servers)
+            return _die(f"MCP server '{args.name}' not found")
+        if not _mcp_confirm_remove(args.name):
+            _print("Cancelled.")
+            return 0
         servers.pop(args.name, None)
         config.data.setdefault("mcp", {})["servers"] = servers
         config.save()
         _print(f"removed MCP server '{args.name}'")
+        try:
+            from ..mcp.oauth_manager import get_mcp_oauth_manager
+
+            get_mcp_oauth_manager().purge_login_state(args.name, spec)
+            if _mcp_spec_declares_oauth(spec):
+                _print("cleaned up MCP OAuth state")
+        except Exception as exc:  # noqa: BLE001
+            _print(f"warning: could not clean MCP OAuth state: {redact_secrets(str(exc))}")
         return 0
-    # list / test / tools
+    if args.action == "list":
+        servers = config.get("mcp.servers", {}) or {}
+        if not servers:
+            _print("No MCP servers configured.")
+            _print('Add one with: aegis mcp add <name> "<command> [args...]"')
+            return 0
+        _print("MCP Servers:")
+        _print(f"{'Name':<16} {'Transport':<30} {'Tools':<14} Status")
+        _print(f"{'-' * 16} {'-' * 30} {'-' * 14} {'-' * 8}")
+        for name, raw_spec in servers.items():
+            spec = raw_spec if isinstance(raw_spec, dict) else {}
+            _print(
+                f"{name:<16} "
+                f"{_mcp_transport_label(spec):<30} "
+                f"{_mcp_tools_label(spec):<14} "
+                f"{_mcp_status_label(spec)}"
+            )
+        return 0
+    if args.action == "test":
+        if not args.name:
+            return _die("usage: aegis mcp test <name>")
+        servers = dict(config.get("mcp.servers", {}) or {})
+        spec = servers.get(args.name)
+        if not isinstance(spec, dict):
+            _mcp_available_hint(servers)
+            return _die(f"MCP server '{args.name}' not found")
+        _mcp_print_test_header(args.name, spec)
+        from ..mcp import client as mcp_client
+
+        start = time.monotonic()
+        try:
+            probe = mcp_client.probe_server(config, args.name)
+        except KeyError:
+            return _die(f"MCP server '{args.name}' not found")
+        elapsed_ms = (time.monotonic() - start) * 1000
+        if not probe.get("ok"):
+            _print(f"  Connection failed ({elapsed_ms:.0f}ms): {probe.get('error') or 'probe failed'}")
+            return 1
+        tools = list(probe.get("tools") or [])
+        _print(f"  Connected ({elapsed_ms:.0f}ms)")
+        _print(f"  Tools discovered: {len(tools)}")
+        for tool in tools:
+            _print(f"    {tool.get('name', ''):<32} {str(tool.get('description', ''))[:80]}")
+        resources = list(probe.get("resources") or [])
+        prompts = list(probe.get("prompts") or [])
+        if resources:
+            _print(f"  Resources discovered: {len(resources)}")
+        if prompts:
+            _print(f"  Prompts discovered: {len(prompts)}")
+        capability_errors = probe.get("capability_errors") or {}
+        if isinstance(capability_errors, dict) and capability_errors:
+            for capability, error in sorted(capability_errors.items()):
+                _print(f"  {capability}: {redact_secrets(str(error))}")
+        return 0
+
+    # unscoped tools still perform a live probe.
+    from ..mcp.client import build_manager
+
     mgr = build_manager(config)
     if not mgr.clients:
         _print("(no MCP servers configured — `aegis mcp add <name> \"<command>\"`)")
@@ -1704,6 +2328,7 @@ def cmd_computer_use(args, config: Config) -> int:
 def _cost_surface_report(config: Config) -> dict[str, object]:
     from ..agent.agent import _matches_deferred_selector
     from ..skills import SkillsLoader
+    from ..tools.devtools import is_bridge_or_direct_tool_name
     from ..tools.registry import default_registry
     from ..util import estimate_tokens
 
@@ -1718,7 +2343,8 @@ def _cost_surface_report(config: Config) -> dict[str, object]:
             tool.name
             for tool in available
             if _matches_deferred_selector(tool, selectors)
-        } - {"tool_search"}
+            and not is_bridge_or_direct_tool_name(tool.name)
+        }
     live = [tool for tool in available if tool.name not in deferred]
     schema_tokens = estimate_tokens(json.dumps(reg.schemas(live), sort_keys=True))
     skills_index = SkillsLoader(config, Path.cwd()).index_block()
@@ -2232,6 +2858,19 @@ def cmd_memory(args, config: Config) -> int:
 
     store = MemoryStore()
     target = "user" if args.user else "memory"
+    review_actions = {"pending", "approve", "apply", "reject", "deny", "drop", "approval", "mode"}
+    if args.action in review_actions:
+        from .. import write_approval as wa
+        from ..write_approval_review import handle_pending_subcommand
+
+        review_args = [args.action] + list(args.text or [])
+        _print(handle_pending_subcommand(
+            wa.MEMORY,
+            review_args,
+            config=config,
+            set_mode_fn=lambda enabled: config.set("memory.write_approval", enabled),
+        ))
+        return 0
     if args.action == "setup":
         provider = (args.text[0] if args.text else "").strip().lower()
         if not provider:
@@ -2353,6 +2992,7 @@ _CONFIG_SET_EXTENSION_ROOTS = {
     "mcp.servers",
     "onboarding.seen",
     "skills.bundles",
+    "tool_output",
 }
 
 
@@ -3975,23 +4615,231 @@ def _completion_words(words: list[str]) -> str:
     return " ".join(words)
 
 
+def _checkpoint_fmt_bytes(value: object) -> str:
+    try:
+        size = float(value or 0)
+    except (TypeError, ValueError):
+        size = 0.0
+    units = ("B", "KB", "MB", "GB", "TB")
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _checkpoint_fmt_age(timestamp: object) -> str:
+    try:
+        age = time.time() - float(timestamp)
+    except (TypeError, ValueError):
+        return "-"
+    if age < 0:
+        return "now"
+    if age < 60:
+        return f"{int(age)}s ago"
+    if age < 3600:
+        return f"{int(age / 60)}m ago"
+    if age < 86400:
+        return f"{int(age / 3600)}h ago"
+    return f"{int(age / 86400)}d ago"
+
+
+def _checkpoint_fmt_created(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    text = text.replace("T", " ")
+    return text[:16]
+
+
+def _checkpoint_short(value: object, width: int) -> str:
+    text = str(value or "").strip() or "(unknown)"
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[-width:]
+    return "..." + text[-(width - 3):]
+
+
+def _checkpoint_row_limit(args) -> int:
+    try:
+        limit = int(getattr(args, "limit", 20) or 20)
+    except (TypeError, ValueError):
+        return 20
+    return limit if limit > 0 else 20
+
+
+def _checkpoint_workdir(cp) -> str:
+    if getattr(cp, "workdir", ""):
+        return str(cp.workdir)
+    files = getattr(cp, "files", {}) or {}
+    if files:
+        try:
+            return str(Path(next(iter(files))).parent)
+        except Exception:
+            return "(unknown)"
+    return "(unknown)"
+
+
+def _checkpoint_git_label(cp) -> str:
+    commit = str(getattr(cp, "git_commit", "") or "")
+    if commit:
+        return commit[:8]
+    return "shadow"
+
+
+def _checkpoint_print_store_header(info: dict) -> None:
+    git_store = info.get("git_store") if isinstance(info.get("git_store"), dict) else {}
+    git_path = git_store.get("path") or str(Path(str(info.get("base") or "")) / "store")
+    git_exists = bool(git_store.get("exists"))
+    git_size = git_store.get("size_bytes", info.get("store_size_bytes", 0))
+    state = "initialized" if git_exists else "not initialized"
+    _print(f"checkpoint base: {info.get('base')}")
+    _print(f"git store: {git_path} ({state}, {_checkpoint_fmt_bytes(git_size)})")
+
+
+def _checkpoint_print_project_rows(info: dict, *, limit: int) -> None:
+    projects = sorted(
+        list(info.get("projects") or []),
+        key=lambda row: row.get("last_touch") or 0,
+        reverse=True,
+    )
+    if not projects:
+        return
+    _print()
+    _print("project workdirs:")
+    _print(f"  {'workdir':<60}  {'checkpoints':>11}  {'size':>10}  {'last touch':>12}  state")
+    for project in projects[:limit]:
+        workdir = _checkpoint_short(project.get("workdir") or "(unknown)", 60)
+        state = "live" if project.get("exists") else "orphan"
+        _print(
+            f"  {workdir:<60}  "
+            f"{int(project.get('checkpoints') or 0):>11}  "
+            f"{_checkpoint_fmt_bytes(project.get('size_bytes', 0)):>10}  "
+            f"{_checkpoint_fmt_age(project.get('last_touch')):>12}  "
+            f"{state}"
+        )
+
+
+def _checkpoint_print_legacy_rows(info: dict, *, limit: int) -> None:
+    legacy = sorted(
+        list(info.get("legacy_archives") or []),
+        key=lambda row: row.get("mtime") or 0,
+        reverse=True,
+    )
+    if not legacy:
+        return
+    _print()
+    _print(f"legacy archives ({len(legacy)}):")
+    for archive in legacy[:limit]:
+        _print(
+            f"  {_checkpoint_short(archive.get('name'), 40):<40}  "
+            f"{_checkpoint_fmt_bytes(archive.get('size_bytes', 0)):>10}"
+        )
+    _print("clear with: aegis checkpoints clear-legacy")
+
+
 def cmd_checkpoints(args, config: Config) -> int:
-    from ..checkpoints import CheckpointStore
+    from ..checkpoints import CheckpointStore, clear_all, clear_legacy, prune_checkpoints, store_status
     store = CheckpointStore()
+    if args.action == "status":
+        info = store_status()
+        _checkpoint_print_store_header(info)
+        _print(f"total size: {_checkpoint_fmt_bytes(info['total_size_bytes'])} ({info['total_size_bytes']} bytes)")
+        _print(
+            f"legacy archives: {len(info.get('legacy_archives') or [])} "
+            f"({_checkpoint_fmt_bytes(info.get('legacy_size_bytes', 0))})"
+        )
+        _print(f"checkpoints: {info['checkpoint_count']}")
+        _print(f"projects: {info['project_count']}")
+        _checkpoint_print_project_rows(info, limit=_checkpoint_row_limit(args))
+        _checkpoint_print_legacy_rows(info, limit=_checkpoint_row_limit(args))
+        return 0
+    if args.action == "list":
+        info = store_status()
+        checkpoints = store.history(limit=_checkpoint_row_limit(args))
+        _checkpoint_print_store_header(info)
+        _print(f"checkpoints: {info['checkpoint_count']}")
+        if not checkpoints:
+            return 0
+        _print()
+        _print(f"  {'#':>2}  {'id':<18}  {'created':<16}  {'files':>5}  {'git':<10}  {'workdir':<42}  label")
+        for idx, cp in enumerate(checkpoints, 1):
+            _print(
+                f"  {idx:>2}  "
+                f"{_checkpoint_short(cp.get('id'), 18):<18}  "
+                f"{_checkpoint_fmt_created(cp.get('timestamp')):<16}  "
+                f"{int(cp.get('files_changed') or 0):>5}  "
+                f"{_checkpoint_short(cp.get('short_commit') or 'shadow', 10):<10}  "
+                f"{_checkpoint_short(cp.get('workdir'), 42):<42}  "
+                f"{cp.get('reason') or ''}"
+            )
+        return 0
+    if args.action == "prune":
+        info = store_status()
+        _print("pruning checkpoint store")
+        _checkpoint_print_store_header(info)
+        _print(f"older_than_days: {args.older_than_days}")
+        _print(f"delete_orphans: {not args.keep_orphans}")
+        _print(f"keep: {args.keep if args.keep is not None else '(unchanged)'}")
+        _print(f"max_size_mb: {args.max_size_mb if args.max_size_mb else '(unchanged)'}")
+        _print()
+        result = prune_checkpoints(
+            older_than_days=args.older_than_days,
+            delete_orphans=not args.keep_orphans,
+            keep=args.keep,
+            max_total_size_mb=args.max_size_mb,
+        )
+        _print(f"scanned: {result['scanned']}")
+        _print(f"deleted orphan: {result['deleted_orphan']}")
+        _print(f"deleted stale: {result['deleted_stale']}")
+        _print(f"deleted over-limit: {result['deleted_over_limit']}")
+        _print(f"errors: {result['errors']}")
+        _print(f"bytes reclaimed: {_checkpoint_fmt_bytes(result['bytes_freed'])} ({result['bytes_freed']} bytes)")
+        return 0
     if args.action == "rollback":
-        restored = store.rollback(args.id)
+        result = store.restore(args.id, file_path=args.file_path)
+        if not result.get("success"):
+            _print(f"rollback failed: {result.get('error') or 'unknown error'}")
+            if result.get("checkpoint"):
+                _print(f"  checkpoint: {result.get('checkpoint')}")
+            return 1
+        restored = list(result.get("restored") or [])
         _print(f"rolled back {len(restored)} file(s): {', '.join(restored) or '(none)'}")
+        _print(f"  checkpoint: {result.get('checkpoint') or args.id or '(latest)'}")
+        _print(f"  workdir: {store.cwd.resolve()}")
+        if args.file_path:
+            _print(f"  file: {args.file_path}")
         return 0
     if args.action == "diff":
         d = store.diff(args.id)
         _print(d or "(no changes since checkpoint)")
         return 0
     if args.action == "clear":
-        _print(f"cleared {store.clear()} checkpoint(s)")
+        before = store_status()
+        result = clear_all()
+        if result.get("deleted"):
+            _print(
+                "cleared checkpoint base: "
+                f"{before.get('checkpoint_count', 0)} checkpoint(s), "
+                f"{before.get('project_count', 0)} project(s), "
+                f"{len(before.get('legacy_archives') or [])} legacy archive(s); "
+                f"reclaimed {_checkpoint_fmt_bytes(result.get('bytes_freed', 0))}"
+            )
+        else:
+            _print("nothing to clear")
         return 0
-    for cp in store.list():
-        _print(f"  {cp.id}  {cp.created_at}  [{cp.label}]  {len(cp.files)} file(s)")
-    return 0
+    if args.action == "clear-legacy":
+        result = clear_legacy()
+        _print(
+            f"deleted {result.get('deleted', 0)} legacy archive(s); "
+            f"reclaimed {_checkpoint_fmt_bytes(result.get('bytes_freed', 0))}; "
+            f"errors {result.get('errors', 0)}"
+        )
+        return 0
+    return _die("usage: aegis checkpoints [list|status|diff|rollback|prune|clear|clear-legacy]")
 
 
 def cmd_background(args, config: Config) -> int:
@@ -4347,12 +5195,32 @@ def _handle_first_run(config: Config) -> int:
         from ..onboarding import run_onboarding
 
         return run_onboarding(config)
-    _print("AEGIS is not configured yet.")
-    _print("Run one of these first:")
-    _print("  aegis setup")
-    _print("  aegis setup --non-interactive --accept-risk --json")
-    _print("Set AEGIS_SKIP_FIRST_RUN=1 to bypass this guard.")
+    from ..onboarding import print_noninteractive_setup_guidance
+
+    print_noninteractive_setup_guidance(
+        "first run must configure AEGIS before chat can start",
+        output_func=_print,
+    )
     return 2
+
+
+def cmd_help(args, config: Config) -> int:
+    parser = build_parser()
+    topic = str(getattr(args, "topic", "") or "")
+    if topic:
+        subparsers = next(
+            (action for action in getattr(parser, "_actions", []) if getattr(action, "choices", None)),
+            None,
+        )
+        choices = getattr(subparsers, "choices", {}) if subparsers is not None else {}
+        command_parser = choices.get(topic)
+        if command_parser is not None:
+            command_parser.print_help()
+            return 0
+        _print(f"unknown help topic: {topic}")
+        return 2
+    parser.print_help()
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4371,6 +5239,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--provider", help="provider override for the default chat/TUI launch")
     p.add_argument("--yolo", action="store_true", help="auto-approve all tools for the default chat/TUI launch")
     sub = p.add_subparsers(dest="command")
+
+    hp = sub.add_parser("help", help="show top-level or command help")
+    hp.add_argument("topic", nargs="?", help="command to show help for")
+    hp.set_defaults(func=cmd_help)
 
     c = sub.add_parser("chat", help="chat with the agent (default)")
     c.add_argument("prompt", nargs="*", help="one-shot prompt (omit for interactive)")
@@ -4683,8 +5555,19 @@ def build_parser() -> argparse.ArgumentParser:
     pr.set_defaults(func=_cmd_pairing)
 
     ck = sub.add_parser("checkpoints", help="list/diff/rollback/clear file checkpoints")
-    ck.add_argument("action", nargs="?", choices=["list", "diff", "rollback", "clear"], default="list")
+    ck.add_argument(
+        "action",
+        nargs="?",
+        choices=["list", "status", "diff", "rollback", "prune", "clear", "clear-legacy"],
+        default="list",
+    )
     ck.add_argument("id", nargs="?")
+    ck.add_argument("--older-than-days", type=float, default=7)
+    ck.add_argument("--keep", type=int, default=None)
+    ck.add_argument("--keep-orphans", action="store_true")
+    ck.add_argument("--max-size-mb", type=float, default=0)
+    ck.add_argument("--limit", type=int, default=20)
+    ck.add_argument("--file", dest="file_path", help="restore only this relative path when rolling back")
     ck.set_defaults(func=cmd_checkpoints)
 
     bg = sub.add_parser("background", help="list background tasks")
@@ -4732,6 +5615,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "config", "opt-in", "opt-out", "tap", "snapshot", "list-modified",
                         "diff", "reset", "repair-official", "publish",
                         "bundles", "bundle", "unbundle",
+                        "pending", "approve", "apply", "reject", "deny", "drop", "approval", "mode",
                     ],
                     default="list")
     sk.add_argument("name", nargs="?", help="skill name, install source, or hub name")
@@ -4783,14 +5667,24 @@ def build_parser() -> argparse.ArgumentParser:
     mc.add_argument("action", nargs="?",
                     choices=[
                         "list", "add", "remove", "test", "serve", "catalog", "install", "tools",
-                        "configure", "login", "picker",
+                        "configure", "login", "reauth", "picker",
                     ],
                     default="list")
     mc.add_argument("name", nargs="?")
     mc.add_argument("cmd", nargs="?", help='command line, e.g. "npx -y @modelcontextprotocol/server-filesystem /tmp"')
-    mc.add_argument("--include", help="comma-separated MCP tools to include for `configure`")
+    mc.add_argument("--url", help="HTTP MCP endpoint URL for `mcp add`")
+    mc.add_argument("--command", dest="mcp_command", help="stdio command for `mcp add`")
+    mc.add_argument("--args", dest="mcp_args", nargs=argparse.REMAINDER, default=[],
+                    help="stdio command arguments for `mcp add`; must be the last option")
+    mc.add_argument("--env", nargs="+", action="append", default=[],
+                    help="stdio server environment variable(s) for `mcp add` (KEY=VALUE)")
+    mc.add_argument("--preset", help="known MCP preset name for `mcp add`")
+    mc.add_argument("--auth", choices=["oauth", "header"], help="HTTP auth mode for `mcp add`")
+    mc.add_argument("--force", action="store_true", help="overwrite an existing MCP server for `mcp add`")
+    mc.add_argument("--include", help="comma-separated MCP tools to include for `configure` or `tools`")
     mc.add_argument("--exclude", help="comma-separated MCP tools to exclude for `configure`")
-    mc.add_argument("--all", action="store_true", help="clear MCP tool filters for `configure`")
+    mc.add_argument("--all", action="store_true", help="clear MCP tool filters for `configure` or `tools`")
+    mc.add_argument("--manual", action="store_true", help="manual code-paste OAuth flow for `mcp login`/`reauth`")
     mc.set_defaults(func=cmd_mcp)
 
     tr = sub.add_parser("trace", help="inspect/export session traces")
@@ -4959,7 +5853,10 @@ def build_parser() -> argparse.ArgumentParser:
     t.set_defaults(func=cmd_tools)
 
     mem = sub.add_parser("memory", help="show/add/replace/remove/status long-term memory")
-    mem.add_argument("action", nargs="?", choices=["show", "add", "replace", "remove", "clear", "status", "setup", "off", "reset"],
+    mem.add_argument("action", nargs="?", choices=[
+        "show", "add", "replace", "remove", "clear", "status", "setup", "off", "reset",
+        "pending", "approve", "apply", "reject", "deny", "drop", "approval", "mode",
+    ],
                      default="show")
     mem.add_argument("text", nargs="*")
     mem.add_argument("--old-text", help="unique substring to replace/remove")

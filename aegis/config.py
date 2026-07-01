@@ -393,12 +393,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "base_url": None,
         "api_mode": None,
         "context_length": None,
+        "ollama_num_ctx": None,
+        "default_headers": {},
+        "request_overrides": {},
     },
     "agent": {
         "max_iterations": 50,
         "ultracode_max_iterations": 250,   # /ultracode raises the step budget so the loop can finish
         "self_verify": False,              # opt-in: re-check the answer once before finalizing (adds 1 call)
         "self_verify_min_tools": 1,        # only self-verify turns that used at least this many tools
+        "verify_after_edit": False,        # opt-in: require real verification after code edits before final
         "personality": "",
         "stream": True,
         "subagent_concurrency": 4,   # max child agents run in parallel by spawn_subagent
@@ -406,7 +410,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "context_engine": "default", # context-management strategy (plugins can register others)
         "reasoning_effort": "medium",   # off|minimal|low|medium|high|xhigh
         "service_tier": "",          # ""/normal or priority (AEGIS fast/priority mode)
+        "tool_use_enforcement": "auto", # auto|true|false|[model substrings]
+        "task_completion_guidance": True,
+        "parallel_tool_call_guidance": True,
+        "environment_probe": True,
+        "api_max_retries": 3,        # total model API attempts per call; 1 disables loop-level retry
         "subdir_hints": True,        # inject a subdir's rule files when the agent first works there
+        # Coding posture: "auto" adds prompt context in code workspaces; "focus"
+        # also demotes non-coding skill categories to names-only; "on" forces;
+        # "off" disables. Boolean legacy configs are still accepted.
+        "coding_context": "auto",
         "compression": {"preserve_first": 3, "preserve_last": 20, "max_tool_tokens": 600,
                         # in-loop compaction fires when history fills this fraction of the
                         # model's window (default 0.50)
@@ -429,6 +442,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "memory": {
         "enabled": True,
         "user_profile_enabled": True,
+        "write_approval": False,      # reference-style: stage/confirm durable memory writes before applying
         "provider": "",              # "" builtin only; or "mem0" | "jsonl"
         "mem0": {
             "host": "",              # self-hosted mem0 API; env fallback MEM0_HOST
@@ -472,15 +486,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "loop_warn_after": 3,        # warn after N identical tool failures/results in a turn
         "loop_same_tool_warn_after": 3, # warn when one tool keeps failing with varied args
         "loop_block_after": 5,       # hard-block an identical failing call after N repeats
+        "loop_hard_stop": False,     # opt-in stricter stops for same-tool/no-progress loops
+        "loop_no_progress_block_after": 5, # with hard_stop, block identical read-only repeats
+        "loop_same_tool_halt_after": 8, # with hard_stop, halt after varied failures for one tool
         "todo_nudge_after": 15,      # remind to update the todo list after N tool uses
         "sensitive_write_allow": [], # absolute paths exempt from file-write safety gating
         "sensitive_read_allow": [],  # absolute paths exempt from secret-file read gating
         "defer_schemas": True,       # ship rarely-used tools name-only; tool_search loads them
         "deferred": list(DEFAULT_DEFERRED_TOOL_SELECTORS),
+        "defer_auto": True,          # auto-defer large MCP/plugin schema surfaces behind tool_search
+        "defer_threshold_ratio": 0.10, # threshold as a fraction of the active model context
+        "defer_min_tokens": 2000,    # fixed fallback/minimum threshold when context is unknown
     },
     "providers": {
         "probe_timeout_seconds": 15,  # dashboard/provider probes are bounded and never use long chat timeouts
         "probe_cache": {},            # provider -> last safe redacted probe result
+        "codex_app_server": {
+            "migrate_config": True,    # keep <CODEX_HOME>/config.toml callback block in sync
+            "expose_aegis_tools": True, # register the curated aegis-tools MCP callback for Codex
+            "discover_plugins": False, # optional plugin/list subprocess query; off in core runtime path
+            "default_permission_profile": ":workspace",
+        },
     },
     "moa": {                          # /moa Mixture-of-Agents slash command
         "models": [],                 # 2–5 model specs: ["gpt-5.5", "openrouter/google/gemini-2.5-pro"]
@@ -518,8 +544,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "paths": [],                 # extra skill dirs
         "disabled": [],
         "allowlist": [],             # optional strict skill allowlist
+        "write_approval": False,      # reference-style: stage durable skill writes for review
         "bundles": {},               # name -> [skill, ...] for preload/slash stacks
-        "template_vars": True,        # expand ${AEGIS_SKILL_DIR}/${AEGIS_SESSION_ID} in loaded skills
+        "template_vars": True,        # expand ${AEGIS/HERMES_SKILL_DIR}/${AEGIS/HERMES_SESSION_ID}
         "inline_shell": False,        # opt-in: expand !`cmd` snippets inside loaded skills
         "inline_shell_timeout": 10,
         "auto_load": True,            # pre-turn: attach relevant skill bodies automatically
@@ -653,6 +680,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "mcp": {
         "enabled": True,
+        "discovery_timeout": 1.5,     # max wait for background MCP discovery before first tool snapshot
         "servers": {},               # name -> {command,args,env} | {url,headers}
         "catalog": [],               # [{name, command|url, args, description, tool_filter}]
     },
@@ -720,6 +748,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "profiles": {},                       # per-platform agent overlay, e.g.
                                               #   telegram: {personality: tg, model: ..., provider: ...}
     },
+    "platform_hints": {},            # platform -> "append" or {append, replace} prompt hint override
     # Per-provider key pools: {anthropic: {keys: [...], strategy: fill_first|round_robin|
     #   least_used|random, cooldown_hours: 24}}. Keys here merge with the comma-split env var.
     # On 402/quota a key is benched for cooldown_hours; on 429/401 the pool rotates. Shared
@@ -751,7 +780,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "tips": True,             # contextual feature-discovery tips (one-time each)
     },
     "fallback_providers": [],         # [{provider, model}]
-    "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var, models:[...]}]
+    "custom_providers": [],           # [{name, base_url, api_mode, context_length, env_var, models:[...], extra_body, extra_headers}]
     "routing": [],                    # [{match: regex, provider, model}] per-prompt routing
 }
 

@@ -14,7 +14,13 @@ import httpx
 from ..types import LLMResponse, Message, ToolCall, ToolSchema, Usage
 from .auth import AuthProvider
 from .base import ApiMode, OnDelta, ProviderTransport
-from .chat_completions import ProviderHTTPError, _raise_for_status
+from .chat_completions import (
+    ProviderHTTPError,
+    _raise_for_status,
+    apply_request_overrides,
+    request_extra_headers,
+    request_timeout,
+)
 from .schema import sanitize as _sanitize_schema
 
 ANTHROPIC_VERSION = "2023-06-01"
@@ -28,7 +34,8 @@ def _cache_ttl() -> str:
     if _CACHE_TTL is None:
         try:
             from ..config import Config
-            _CACHE_TTL = (Config.load().get("prompt_caching.cache_ttl", "5m") or "5m")
+            value = str(Config.load().get("prompt_caching.cache_ttl", "5m") or "5m").strip()
+            _CACHE_TTL = value if value in {"5m", "1h"} else "5m"
         except Exception:  # noqa: BLE001
             _CACHE_TTL = "5m"
     return _CACHE_TTL
@@ -145,6 +152,7 @@ class AnthropicTransport(ProviderTransport):
         cwd=None,
         on_reasoning: OnDelta | None = None,
         service_tier: str = "",
+        request_overrides: dict | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/v1/messages"
         system, wire_messages = self._to_wire(messages)
@@ -160,8 +168,10 @@ class AnthropicTransport(ProviderTransport):
             "Content-Type": "application/json",
             "anthropic-version": ANTHROPIC_VERSION,
             **(extra_headers or {}),
+            **request_extra_headers(request_overrides),
             **auth.headers(),
         }
+        timeout = request_timeout(timeout, request_overrides)
         payload: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -204,6 +214,7 @@ class AnthropicTransport(ProviderTransport):
             # No marker on tools: the system-prompt breakpoint already caches the tools
             # prefix, and Anthropic allows at most 4 breakpoints (1 system + 3 messages).
             payload["tools"] = wire_tools
+        apply_request_overrides(payload, request_overrides)
 
         if stream:
             return self._stream(url, headers, payload, on_delta, timeout, on_reasoning)

@@ -252,8 +252,8 @@ def test_tool_schema_sanitized_across_provider_transports():
     for params in (chat_params, response_params, dynamic_params):
         assert "$schema" not in params
         assert params["properties"]["path"]["type"] == "string"
-        assert "examples" not in params["properties"]["path"]
-        assert "exclusiveMinimum" not in params["properties"]["count"]
+        assert params["properties"]["path"]["examples"] == ["README.md"]
+        assert params["properties"]["count"]["exclusiveMinimum"] == 0
 
 
 def test_responses_wire_and_parse():
@@ -1866,7 +1866,7 @@ def test_openai_codex_oauth_adds_account_header():
 
     headers = OAuthAuth(OPENAI_CODEX_OAUTH, store).headers()
     assert headers["Authorization"] == f"Bearer {token}"
-    assert headers["chatgpt-account-id"] == "acct_123"
+    assert headers["ChatGPT-Account-ID"] == "acct_123"
 
 
 def test_openai_api_key_wins_over_identity_only_oauth(monkeypatch):

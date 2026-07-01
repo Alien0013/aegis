@@ -105,6 +105,7 @@ class ApplyPatchTool(Tool):
     name = "apply_patch"
     description = "Apply a unified diff (git/patch format) to files in the working directory. Use for multi-file or multi-hunk edits."
     groups = ["fs"]
+    extra_toolsets = ["file"]
     parameters = {
         "type": "object",
         "properties": {"patch": {"type": "string", "description": "a unified diff"}},
@@ -155,7 +156,11 @@ class ApplyPatchTool(Tool):
             with ExitStack() as stack:
                 for target in sorted(targets, key=lambda p: os.path.realpath(str(p))):
                     stack.enter_context(file_state.lock_path(target))
-                stale = "".join(file_state.stale_warning(target) for target in targets)
+                task_id = str(getattr(ctx, "task_id", "") or "")
+                stale = "".join(
+                    file_state.stale_warning(target, task_id=task_id)
+                    for target in targets
+                )
                 from .builtin import _lsp_delta, _lsp_snapshot
                 for target in targets:
                     _lsp_snapshot(ctx, target)
@@ -172,7 +177,7 @@ class ApplyPatchTool(Tool):
                                              text=True, timeout=60)
                     if applied.returncode == 0:
                         for target in targets:
-                            file_state.note(target)
+                            file_state.note_write(task_id, target)
                         deltas = "".join(_lsp_delta(ctx, target) for target in targets)
                         count = len(targets)
                         return ToolResult.ok(
@@ -379,6 +384,7 @@ class ClarifyTool(Tool):
                    "them for a free-text question. Prefer this over assuming on consequential "
                    "or irreversible actions.")
     groups = []   # safe: it only asks
+    extra_toolsets = ["clarify"]
     parameters = {
         "type": "object",
         "properties": {

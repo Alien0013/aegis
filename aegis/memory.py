@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import inspect
 import threading
+from typing import Any
 
 from . import config as cfg
 from .constants import MEMORY_CHAR_LIMIT, MEMORY_DELIM, USER_CHAR_LIMIT
@@ -274,6 +275,105 @@ class MemoryStore:
             entries.pop(matches[0][0])
             self._write_entries(target, entries)
         return f"removed 1 entry from {_FILES[target]} ({self.usage(target)})"
+
+    def apply_batch(self, target: str, operations: list[dict[str, Any]]) -> str:
+        """Apply add/replace/remove operations atomically against the final budget."""
+        from ._locks import STORE_LOCK, file_lock
+
+        if not operations:
+            return "refused: operations list is empty."
+
+        for i, op in enumerate(operations):
+            action = (op or {}).get("action")
+            content = (op or {}).get("content")
+            if action in {"add", "replace"} and content:
+                why = scan_entry(str(content))
+                if why:
+                    return (
+                        f"refused: operation {i + 1} content matches a prompt-injection "
+                        f"pattern ({why}) and must not enter persistent memory."
+                    )
+
+        with STORE_LOCK, file_lock(self._path(target)):
+            bak = self._detect_drift(target)
+            if bak:
+                return self._drift_message(_FILES[target], bak)
+
+            working = list(self.entries(target))
+            current_total = len(MEMORY_DELIM.join(working))
+            limit = self._limit(target)
+
+            for i, op in enumerate(operations):
+                op = op or {}
+                action = op.get("action")
+                content = str(op.get("content") or "").strip()
+                old_text = str(op.get("old_text") or op.get("match") or "").strip()
+                pos = f"operation {i + 1} ({action or 'unknown'})"
+
+                if action == "add":
+                    if not content:
+                        return self._batch_error(target, working, f"refused: {pos}: content is required.")
+                    if content in working:
+                        continue
+                    working.append(content)
+                    continue
+
+                if action == "replace":
+                    if not old_text:
+                        return self._batch_error(target, working, f"refused: {pos}: old_text is required.")
+                    if not content:
+                        return self._batch_error(
+                            target,
+                            working,
+                            f"refused: {pos}: content is required (use action=remove to delete).",
+                        )
+                    matches = [(j, e) for j, e in enumerate(working) if old_text in e]
+                    if not matches:
+                        return self._batch_error(target, working, f"no entry matching '{old_text}'")
+                    amb = self._ambiguous(matches)
+                    if amb:
+                        return self._batch_error(target, working, amb)
+                    working[matches[0][0]] = content
+                    continue
+
+                if action == "remove":
+                    if not old_text:
+                        return self._batch_error(target, working, f"refused: {pos}: old_text is required.")
+                    matches = [(j, e) for j, e in enumerate(working) if old_text in e]
+                    if not matches:
+                        return self._batch_error(target, working, f"no entry matching '{old_text}'")
+                    amb = self._ambiguous(matches)
+                    if amb:
+                        return self._batch_error(target, working, amb)
+                    working.pop(matches[0][0])
+                    continue
+
+                return self._batch_error(
+                    target,
+                    working,
+                    f"refused: {pos}: unknown action. Use add, replace, or remove.",
+                )
+
+            new_total = len(MEMORY_DELIM.join(working)) if working else 0
+            if new_total > limit:
+                listing = "\n".join(f"  - {e[:90]}" for e in self.entries(target) if e)
+                return (
+                    f"memory full ({current_total:,}/{limit:,} chars): after applying all "
+                    f"{len(operations)} operations it would be at {new_total:,}. Nothing "
+                    "was changed. Remove or shorten more entries in the same batch, then "
+                    f"retry. Current entries:\n{listing}"
+                )
+
+            self._write_entries(target, working)
+        return f"applied {len(operations)} operation(s) to {_FILES[target]} ({self.usage(target)})"
+
+    @staticmethod
+    def _batch_error(target: str, entries: list[str], message: str) -> str:
+        listing = "\n".join(f"  - {e[:90]}" for e in entries if e)
+        suffix = " No operations were applied (batch is all-or-nothing)."
+        if listing:
+            suffix += f" Current entries:\n{listing}"
+        return message + suffix
 
     def consolidate(self, target: str, threshold: float = 0.9) -> dict:
         """Deterministic dedup safety net for the bounded store: drop entries that are
@@ -875,7 +975,100 @@ class MemoryManager:
             except Exception:  # noqa: BLE001
                 pass
 
-    def handle_tool(self, args: dict):
+    @staticmethod
+    def _memory_payload(args: dict) -> dict:
+        target = str(args.get("target") or "memory")
+        if args.get("operations") is not None:
+            return {
+                "action": "batch",
+                "target": target,
+                "operations": list(args.get("operations") or []),
+            }
+        payload = {
+            "action": str(args.get("action") or ""),
+            "target": target,
+        }
+        if args.get("content") is not None:
+            payload["content"] = str(args.get("content") or "")
+        match = args.get("old_text") or args.get("match")
+        if match is not None:
+            payload["old_text"] = str(match)
+        return payload
+
+    @staticmethod
+    def _memory_summary(payload: dict) -> str:
+        action = str(payload.get("action") or "")
+        target = str(payload.get("target") or "memory")
+        if action == "batch":
+            operations = payload.get("operations") or []
+            return f"Apply {len(operations)} op(s) to {target} memory"
+        from . import write_approval
+
+        return write_approval.memory_summary(payload)
+
+    @staticmethod
+    def _missing_old_text_result(action: str, target: str, entries: list[str], usage: str):
+        from .tools.base import ToolResult
+
+        listing = "\n".join(f"  - {e[:90]}" for e in entries if e)
+        message = (
+            f"{action} needs old_text -- a short unique substring of the entry to "
+            f"{action}. Reissue the {action} with old_text set to part of one of "
+            f"the current entries below. Current usage: {usage}."
+        )
+        if listing:
+            message += f"\nCurrent entries:\n{listing}"
+        return ToolResult.error(message)
+
+    def _stage_memory_write(self, args: dict, *, origin: str = "foreground"):
+        from . import write_approval
+        from .tools.base import ToolResult
+
+        payload = self._memory_payload(args)
+        record = write_approval.stage_write(
+            write_approval.MEMORY,
+            payload,
+            self._memory_summary(payload),
+            origin=origin,
+            config=self.config,
+        )
+        message = (
+            f"staged memory write for approval: {record['id']}. "
+            "No persistent memory file was changed."
+        )
+        return ToolResult.ok(
+            message,
+            display=f"staged memory write {record['id']}",
+            data={
+                "success": True,
+                "staged": True,
+                "pending_id": record["id"],
+                "pending": record,
+                "_change": payload,
+            },
+        )
+
+    def _memory_gate(self, args: dict, *, approver=None, origin: str = "foreground"):
+        from . import write_approval
+
+        payload = self._memory_payload(args)
+        return write_approval.evaluate_gate(
+            write_approval.MEMORY,
+            inline_summary=self._memory_summary(payload),
+            inline_detail=json.dumps(payload, indent=2, sort_keys=True),
+            config=self.config,
+            interactive_approver=approver,
+            origin=origin,
+        )
+
+    def handle_tool(
+        self,
+        args: dict,
+        *,
+        approver=None,
+        origin: str = "foreground",
+        bypass_write_approval: bool = False,
+    ):
         from .tools.base import ToolResult
 
         action = args.get("action")
@@ -883,9 +1076,59 @@ class MemoryManager:
         match = args.get("old_text") or args.get("match")    # old_text preferred; match is legacy
         if target not in _FILES:
             return ToolResult.error("target must be 'memory' or 'user'")
+        if args.get("operations") is not None:
+            operations = args.get("operations")
+            if not isinstance(operations, list):
+                return ToolResult.error("operations must be a list of memory operation objects")
+            for i, op in enumerate(operations):
+                op = op or {}
+                op_action = op.get("action")
+                content = op.get("content")
+                if op_action in {"add", "replace"} and content:
+                    why = scan_entry(str(content))
+                    if why:
+                        return ToolResult.error(
+                            f"operation {i + 1} content matches a prompt-injection pattern "
+                            f"({why}) and must not enter persistent memory"
+                        )
+            batch_args = dict(args)
+            batch_args["action"] = "batch"
+            if not bypass_write_approval:
+                gate = self._memory_gate(batch_args, approver=approver, origin=origin)
+                if gate.blocked:
+                    return ToolResult.error(f"memory write approval denied: {gate.reason}")
+                if gate.staged:
+                    return self._stage_memory_write(batch_args, origin=origin)
+            result = self.store.apply_batch(target, operations)
+            if result.startswith(("memory full", "refused", "multiple entries", "no entry matching")):
+                return ToolResult.error(result)
+            self.on_memory_write(
+                action="batch",
+                target=target,
+                content=json.dumps(operations, ensure_ascii=False),
+                result=result,
+            )
+            return ToolResult.ok(
+                result,
+                display=f"updated memories/{_FILES[target]}",
+                data={
+                    "success": True,
+                    "done": True,
+                    "action": "batch",
+                    "target": target,
+                    "operation_count": len(operations),
+                    "usage": self.store.usage(target),
+                },
+            )
         if action == "add":
             if not args.get("content"):
                 return ToolResult.error("content is required for add")
+            if not bypass_write_approval:
+                gate = self._memory_gate(args, approver=approver, origin=origin)
+                if gate.blocked:
+                    return ToolResult.error(f"memory write approval denied: {gate.reason}")
+                if gate.staged:
+                    return self._stage_memory_write(args, origin=origin)
             result = self.store.add(target, args["content"])
             if result.startswith(("memory full", "refused", "multiple entries")):
                 return ToolResult.error(result)      # the model must consolidate / rephrase
@@ -905,8 +1148,21 @@ class MemoryManager:
             return ToolResult.ok(f"{result} — {note}",
                                  display=f"remembered in memories/{_FILES[target]}")
         if action == "replace":
-            if not match or not args.get("content"):
-                return ToolResult.error("replace needs old_text and content")
+            if not match:
+                return self._missing_old_text_result(
+                    "replace",
+                    target,
+                    self.store.entries(target),
+                    self.store.usage(target),
+                )
+            if not args.get("content"):
+                return ToolResult.error("replace needs content")
+            if not bypass_write_approval:
+                gate = self._memory_gate(args, approver=approver, origin=origin)
+                if gate.blocked:
+                    return ToolResult.error(f"memory write approval denied: {gate.reason}")
+                if gate.staged:
+                    return self._stage_memory_write(args, origin=origin)
             result = self.store.replace(target, match, args["content"])
             if result.startswith(("memory full", "refused", "multiple entries", "no entry matching")):
                 return ToolResult.error(result)
@@ -920,7 +1176,18 @@ class MemoryManager:
             return ToolResult.ok(result)
         if action == "remove":
             if not match:
-                return ToolResult.error("remove needs old_text")
+                return self._missing_old_text_result(
+                    "remove",
+                    target,
+                    self.store.entries(target),
+                    self.store.usage(target),
+                )
+            if not bypass_write_approval:
+                gate = self._memory_gate(args, approver=approver, origin=origin)
+                if gate.blocked:
+                    return ToolResult.error(f"memory write approval denied: {gate.reason}")
+                if gate.staged:
+                    return self._stage_memory_write(args, origin=origin)
             result = self.store.remove(target, match)
             if result.startswith(("refused", "multiple entries", "no entry matching")):
                 return ToolResult.error(result)

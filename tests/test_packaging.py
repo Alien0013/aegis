@@ -247,15 +247,22 @@ def test_pyproject_extras_expose_native_compatibility_aliases():
     extras = pyproject["project"]["optional-dependencies"]
     for name in ("cli", "cron", "pty", "web", "messaging", "gateway", "computer-use"):
         assert name in extras
+    native_sdk_extras = {
+        "daytona": ["daytona>=0.192,<1"],
+        "mcp": ["mcp>=1.28,<2"],
+        "modal": ["modal>=1.5,<2"],
+    }
     compatibility_aliases = {
-        "acp", "anthropic", "azure-identity", "bedrock", "daytona", "edge-tts", "exa", "fal",
-        "firecrawl", "google", "locales", "markers", "mcp", "mistral", "modal",
+        "acp", "anthropic", "azure-identity", "bedrock", "edge-tts", "exa", "fal",
+        "firecrawl", "google", "locales", "markers", "mistral",
         "nemo-relay", "parallel-web", "plugins", "py-modules", "select", "teams", "termux",
         "termux-all", "tts-premium", "vision", "voice", "youtube",
     }
-    assert compatibility_aliases <= set(extras)
+    assert compatibility_aliases | set(native_sdk_extras) <= set(extras)
     for name in compatibility_aliases:
         assert extras[name] == []
+    for name, deps in native_sdk_extras.items():
+        assert extras[name] == deps
     assert extras["cli"] == []
     assert extras["cron"] == []
     assert extras["pty"] == []

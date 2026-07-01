@@ -483,7 +483,7 @@ def test_release_workflow_builds_desktop_artifacts_for_all_packaged_targets():
     assert "desktop-macos:" in workflow
     assert "cache-dependency-path: desktop/package-lock.json" in workflow
     assert "working-directory: desktop" in workflow
-    assert "run: npm ci" in workflow
+    assert "run: npm ci --workspaces=false" in workflow
     assert "run: npm run dist:linux" in workflow
     assert "run: npm run dist:win" in workflow
     assert "run: npm run dist:mac" in workflow

@@ -582,7 +582,7 @@ def test_prefetch_is_wire_only_not_persisted(tmp_path, monkeypatch):
     assert all("<retrieved_memory>" not in row["content"] for row in recent)
 
 
-def test_sync_turn_fires_for_empty_assistant_response(tmp_path, monkeypatch):
+def test_sync_turn_skips_empty_assistant_response(tmp_path, monkeypatch):
     config = _cfg(tmp_path, monkeypatch)
     from aegis.agent.agent import Agent
     from aegis.memory import MemoryManager
@@ -614,8 +614,7 @@ def test_sync_turn_fires_for_empty_assistant_response(tmp_path, monkeypatch):
     assert agent.memory.flush_pending(timeout=1)
 
     assert result.content == ""
-    assert len(external.synced) == 1
-    assert external.synced[0][-2:] == [("user", "say nothing"), ("assistant", "")]
+    assert external.synced == []
     assert all(row["role"] != "assistant" for row in agent.memory.history.recent(5))
 
 

@@ -14,6 +14,7 @@ class ProcessTool(Tool):
                   "actions: start(command) | list | poll(id) | log/logs(id) | "
                   "wait(id, timeout) | kill/stop(id) | write/submit/close(id).")
     groups = ["runtime"]
+    extra_toolsets = ["terminal"]
     parameters = {
         "type": "object",
         "properties": {

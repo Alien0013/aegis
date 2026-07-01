@@ -188,7 +188,9 @@ class PluginAPI:
         Events include 'on_session_start' (fn(agent)), 'pre_llm_call'
         (fn(messages, agent) -> messages|None to rewrite the request), and
         provider observers: 'pre_api_request', 'post_api_request',
-        'api_request_error' (fn(payload, agent)).
+        'api_request_error' (fn(payload, agent)). Tool observers such as
+        'pre_tool_call', 'post_tool_call', and 'transform_tool_result' receive
+        keyword arguments matching the model tool-dispatch observer contract.
         """
         _HOOKS.setdefault(event, []).append(fn)
         if self._current_plugin is not None:
@@ -339,6 +341,66 @@ def fire_hook(event: str, *args, **kwargs):
             from ._log import log_exc
             log_exc(f"plugin hook {event} failed: {e}")
     return result
+
+
+def invoke_hook(hook_name: str, **kwargs: Any) -> list[Any]:
+    """Invoke keyword-style plugin hooks and collect non-None returns.
+
+    This complements :func:`fire_hook`, which preserves AEGIS' older positional
+    hook API. The model-tool observer path uses Hermes-style keyword hooks where
+    multiple plugins may return policy or transform directives.
+    """
+    kwargs.setdefault("telemetry_schema_version", 1)
+    results: list[Any] = []
+    for fn in _HOOKS.get(hook_name, []):
+        try:
+            out = fn(**kwargs)
+            if out is not None:
+                results.append(out)
+        except Exception as e:  # noqa: BLE001 - plugin hooks are fail-soft
+            from ._log import log_exc
+            log_exc(f"plugin hook {hook_name} failed: {e}")
+    return results
+
+
+def has_hook(hook_name: str) -> bool:
+    """Return True when at least one callback is registered for ``hook_name``."""
+    return bool(_HOOKS.get(hook_name))
+
+
+def get_pre_tool_call_block_message(
+    tool_name: str,
+    args: dict[str, Any] | None,
+    *,
+    task_id: str = "",
+    session_id: str = "",
+    tool_call_id: str = "",
+    turn_id: str = "",
+    api_request_id: str = "",
+    middleware_trace: list[dict[str, Any]] | None = None,
+) -> str | None:
+    """Return the first valid ``pre_tool_call`` block directive, if any."""
+    hook_results = invoke_hook(
+        "pre_tool_call",
+        tool_name=tool_name,
+        args=args if isinstance(args, dict) else {},
+        task_id=task_id,
+        session_id=session_id,
+        tool_call_id=tool_call_id,
+        turn_id=turn_id,
+        api_request_id=api_request_id,
+        middleware_trace=list(middleware_trace or []),
+    )
+    for result in hook_results:
+        if not isinstance(result, dict):
+            continue
+        action = str(result.get("action") or result.get("decision") or "").strip().lower()
+        if action not in {"block", "deny"}:
+            continue
+        message = result.get("message") or result.get("reason")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return None
 
 
 def _call_middleware(fn, payload, next_call, agent):

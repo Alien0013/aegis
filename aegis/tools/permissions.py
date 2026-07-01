@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from typing import Any
 
+from ..redact import redact_secret_values, redact_secrets
 from .base import Tool, ToolContext
 
 # Catastrophic commands that are NEVER allowed — even in full/yolo mode.
@@ -28,10 +30,112 @@ HARDLINE_PATTERNS = [
 ]
 
 _DANGER_TARGETS = {"/", "~", "/*", "$HOME", "/.", "~/", "/root", "/home"}
+_TERMINAL_TOOLS = {"bash", "process"}
+_SANDBOX_BACKENDS = {"docker", "singularity", "apptainer", "modal", "daytona"}
+_REMOTE_BACKENDS = {"ssh", "modal", "daytona"}
 
 # Shell operators that chain separate commands — allowlist matching splits on these
 # so every chained command must independently match (no bypass via `&&`/`|`/`;`).
 _SHELL_SPLIT_RE = re.compile(r"&&|\|\||[;|\n]")
+
+
+def _config_float(config: Any, keys: tuple[str, ...], default: float) -> float:
+    for key in keys:
+        try:
+            value = config.get(key, None)
+        except Exception:  # noqa: BLE001
+            value = None
+        if value in (None, ""):
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _approval_timeout(config: Any) -> float:
+    return _config_float(
+        config,
+        (
+            "tools.approval_timeout_seconds",
+            "tools.approval.timeout_seconds",
+            "server.approval_timeout_seconds",
+        ),
+        300.0,
+    )
+
+
+def _approval_poll_interval(config: Any) -> float:
+    return max(
+        0.01,
+        _config_float(
+            config,
+            ("tools.approval_poll_interval_seconds", "tools.approval.poll_interval_seconds"),
+            1.0,
+        ),
+    )
+
+
+def _choice_allows(verdict: object) -> bool:
+    if verdict is True:
+        return True
+    if verdict is False or verdict is None:
+        return False
+    text = str(verdict).strip().lower()
+    return text in {"1", "true", "yes", "y", "approve", "approved", "allow", "allowed",
+                    "once", "session", "always"}
+
+
+def _config_value(config: Any, key: str, default: Any = None) -> Any:
+    try:
+        return config.get(key, default)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _config_bool(config: Any, key: str, default: bool = False) -> bool:
+    value = _config_value(config, key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _execution_surface(tool: Tool, args: dict) -> str:
+    if tool.name == "bash":
+        return "shell_background" if args.get("background") else "shell"
+    if tool.name == "process":
+        action = str(args.get("action") or "").strip().lower()
+        return "process_start" if action == "start" else "process"
+    if tool.name == "execute_code":
+        return "execute_code"
+    return "tool"
+
+
+def _effective_terminal_backend(config: Any, task_id: str, cwd: str) -> tuple[str, str, str]:
+    configured = str(_config_value(config, "tools.terminal_backend", "local") or "local")
+    configured = configured.strip().lower() or "local"
+    try:
+        from .backends import resolve_backend_context
+
+        context = resolve_backend_context(configured, cwd, task_id or None)
+        return (
+            configured,
+            str(context.get("backend") or configured),
+            str(context.get("cwd") or cwd or ""),
+        )
+    except Exception:  # noqa: BLE001
+        return configured, configured, cwd
+
+
+def _timeout_arg(args: dict) -> int | str:
+    raw = args.get("timeout")
+    if raw in (None, ""):
+        return ""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return str(raw)
 
 
 def _command_segments(command: str) -> list[str]:
@@ -270,17 +374,146 @@ class PermissionEngine:
                 return True, "smart-approved (auxiliary model)"
             if verdict == "DANGEROUS":
                 return False, "smart-denied (auxiliary model)"
-        if ctx.approver is None:
-            return False, f"denied (no approver{'; ' + flagged if flagged else ''})"
         prompt = self._format_prompt(tool, args) + (f"  ⚠ {flagged}" if flagged else "")
-        verdict = ctx.approver(prompt)
+        approver = ctx.approver
+        if approver is None:
+            try:
+                from .thread_context import get_current_approver
+
+                approver = get_current_approver()
+            except Exception:  # noqa: BLE001
+                approver = None
+        if approver is None:
+            queued = self._await_queued_approval(tool, args, prompt, ctx, flagged=flagged)
+            if queued is None:
+                return False, f"denied (no approver{'; ' + flagged if flagged else ''})"
+            return queued
+        verdict = approver(prompt)
         # The approver may return True/False, or the string "always" to allow this
         # tool/command for the rest of the session without re-prompting.
         if verdict == "always" and not flagged:    # never auto-allow a flagged command
             self.allow_always(tool, args)
             return True, "approved by user (always, this session)"
-        approved = bool(verdict)
+        approved = _choice_allows(verdict)
         return (approved, "approved by user" if approved else "rejected by user")
+
+    def _await_queued_approval(
+        self,
+        tool: Tool,
+        args: dict,
+        prompt: str,
+        ctx: ToolContext,
+        *,
+        flagged: str | None = None,
+    ) -> tuple[bool, str] | None:
+        """Use the context-local pending approval queue when a notifier is bound."""
+        try:
+            from .thread_context import (
+                await_pending_approval,
+                get_current_approval_context,
+                has_approval_notifier,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        approval_ctx = get_current_approval_context(default_session_key="")
+        session_key = approval_ctx.session_key
+        if not session_key or not has_approval_notifier(session_key):
+            return None
+        safe_args = redact_secret_values(dict(args or {}))
+        target = redact_secrets(self._target(tool, args))
+        runtime_metadata = self._approval_runtime_metadata(tool, args, ctx, approval_ctx)
+        payload = {
+            "session_key": session_key,
+            "turn_id": approval_ctx.turn_id,
+            "tool_call_id": approval_ctx.tool_call_id,
+            "tool": tool.name,
+            "groups": list(tool.groups or []),
+            "target": target,
+            "args": safe_args,
+            "prompt": redact_secrets(prompt),
+            "flagged": flagged or "",
+            "allow_permanent": not bool(flagged),
+            **runtime_metadata,
+        }
+        decision = await_pending_approval(
+            payload,
+            session_key=session_key,
+            timeout_seconds=_approval_timeout(self.config),
+            poll_interval=_approval_poll_interval(self.config),
+        )
+        if decision.notify_failed:
+            return False, "queued approval notify failed"
+        if not decision.resolved:
+            return False, "queued approval timed out"
+        choice = str(decision.choice or "").strip().lower()
+        if not _choice_allows(choice):
+            if decision.interrupted:
+                return False, "queued approval interrupted"
+            return False, "queued approval denied"
+        if choice in {"session", "always"} and not flagged:
+            self.allow_always(tool, args)
+            scope = "session" if choice == "session" else "always, this session"
+            return True, f"approved by queued user ({scope})"
+        return True, "approved by queued user"
+
+    def _approval_runtime_metadata(
+        self,
+        tool: Tool,
+        args: dict,
+        ctx: ToolContext,
+        approval_ctx,
+    ) -> dict[str, Any]:
+        """Build backend/sandbox metadata for a queued approval payload."""
+        config = getattr(ctx, "config", None) or self.config
+        task_id = str(getattr(ctx, "task_id", "") or approval_ctx.task_id or "")
+        cwd = str(getattr(ctx, "cwd", "") or approval_ctx.cwd or "")
+        surface = approval_ctx.surface or _execution_surface(tool, args)
+        configured_backend = ""
+        backend = str(approval_ctx.backend or "").strip().lower()
+        if tool.name in _TERMINAL_TOOLS:
+            configured_backend, resolved_backend, resolved_cwd = _effective_terminal_backend(
+                config,
+                task_id,
+                cwd,
+            )
+            backend = backend or resolved_backend
+            cwd = resolved_cwd
+        elif tool.name == "execute_code":
+            configured_backend = "local"
+            backend = backend or "local"
+        backend = backend or configured_backend
+        timeout = _timeout_arg(args)
+        process_action = str(args.get("action") or "").strip().lower()
+        is_sandbox = backend in _SANDBOX_BACKENDS
+        metadata: dict[str, Any] = {
+            "backend": backend,
+            "configured_backend": configured_backend,
+            "task_id": task_id,
+            "cwd": redact_secrets(cwd),
+            "execution_surface": surface,
+            "timeout": timeout,
+            "background": bool(args.get("background") or process_action == "start"),
+            "process_action": process_action,
+            "execution": {
+                "surface": surface,
+                "tool": tool.name,
+                "backend": backend,
+                "configured_backend": configured_backend,
+                "task_id": task_id,
+                "cwd": redact_secrets(cwd),
+                "timeout": timeout,
+                "background": bool(args.get("background") or process_action == "start"),
+                "process_action": process_action,
+            },
+            "sandbox": {
+                "backend": backend,
+                "is_sandbox": is_sandbox,
+                "is_remote": backend in _REMOTE_BACKENDS,
+                "host_workspace_mounted": backend == "docker",
+                "allow_local_fallback": _config_bool(config, "tools.allow_local_fallback", False),
+            },
+        }
+        return metadata
 
     @staticmethod
     def _format_prompt(tool: Tool, args: dict) -> str:

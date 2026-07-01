@@ -226,17 +226,25 @@ def test_launch_requires_built_bundle(monkeypatch, tmp_path):
 def test_fullscreen_enabled_respects_classic_env(monkeypatch):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
     cfg = Config.load()
     monkeypatch.setenv("AEGIS_CLASSIC_TUI", "1")
     assert repl._fullscreen_enabled(cfg) is False
     monkeypatch.delenv("AEGIS_CLASSIC_TUI", raising=False)
-    # With a TTY, no opt-out, and no running loop, the full-screen surface is selected.
+    # With a capable TTY, no opt-out, and no running loop, the full-screen surface is selected.
     assert repl._fullscreen_enabled(cfg) is True
 
 
 def test_fullscreen_disabled_without_tty(monkeypatch):
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False, raising=False)
+    assert repl._fullscreen_enabled(Config.load()) is False
+
+
+def test_fullscreen_disabled_for_dumb_terminal(monkeypatch):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.setenv("TERM", "dumb")
     assert repl._fullscreen_enabled(Config.load()) is False
 
 

@@ -19,7 +19,7 @@ def _send(obj: dict) -> None:
     sys.stdout.flush()
 
 
-def run_mcp_server(config) -> None:
+def run_mcp_server(config, *, visible_tool_names: set[str] | None = None, server_name: str = "aegis") -> None:
     from ..tools.base import ToolContext
     from ..tools.permissions import PermissionEngine
     from ..tools.registry import default_registry
@@ -43,6 +43,11 @@ def run_mcp_server(config) -> None:
             except Exception:  # noqa: BLE001
                 pass
     visible_tools = {tool.name: tool for tool in registry.available(toolsets)}
+    if visible_tool_names is not None:
+        visible_tools = {
+            name: tool for name, tool in visible_tools.items()
+            if name in visible_tool_names
+        }
     agent = SimpleNamespace(
         config=config,
         session=session,
@@ -51,6 +56,7 @@ def run_mcp_server(config) -> None:
         skills=skills,
         cwd=cwd,
         provider=None,
+        permissions=permissions,
         tools_used=0,
         _trace_context={},
         deferred_tool_names=lambda available=None: set(),
@@ -80,7 +86,7 @@ def run_mcp_server(config) -> None:
                 _send({"jsonrpc": "2.0", "id": mid, "result": {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
-                    "serverInfo": {"name": "aegis", "version": "0.1.0"}}})
+                    "serverInfo": {"name": server_name, "version": "0.1.0"}}})
             elif method == "notifications/initialized":
                 continue
             elif method == "tools/list":
@@ -129,10 +135,13 @@ def run_mcp_server(config) -> None:
                         "isError": True}})
                     continue
                 try:
-                    res = tool.run(params.get("arguments", {}), ctx)
+                    from ..tools.async_bridge import run_sync_awaitable
+
+                    res = run_sync_awaitable(tool.run(params.get("arguments", {}), ctx))
                     store.save(session)
                     _send({"jsonrpc": "2.0", "id": mid, "result": {
-                        "content": [{"type": "text", "text": res.content}], "isError": res.is_error}})
+                        "content": [{"type": "text", "text": getattr(res, "content", str(res))}],
+                        "isError": bool(getattr(res, "is_error", False))}})
                 except Exception as e:  # noqa: BLE001
                     _send({"jsonrpc": "2.0", "id": mid, "result": {
                         "content": [{"type": "text", "text": f"{type(e).__name__}: {e}"}], "isError": True}})

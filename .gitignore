@@ -23,6 +23,9 @@ aegis_images/
 auth.json
 state.db
 
+# Local reference-comparison artifacts
+docs/audit/
+
 # OS / editor
 .DS_Store
 *.swp

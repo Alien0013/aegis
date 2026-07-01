@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from aegis.agent.agent import Agent
 from aegis.config import Config
 from aegis.session import Session
@@ -39,7 +41,10 @@ def test_tool_search_activates_deferred_tool():
     ctx = ToolContext(cwd=a.cwd, config=a.config, agent=a)
     r = ToolSearchTool().run({"query": "generate_image"}, ctx)
     assert not r.is_error
-    assert "activated `generate_image`" in r.content and "parameters" in r.content
+    body = json.loads(r.content)
+    assert "generate_image" in body["activated"]
+    schemas = {schema["name"]: schema for schema in body["schemas"]}
+    assert "parameters" in schemas["generate_image"]
     assert "generate_image" in a.activated_tools
     # second search doesn't re-activate (already live)
     r2 = ToolSearchTool().run({"query": "generate_image"}, ctx)
@@ -53,7 +58,8 @@ def test_tool_search_and_deferred_index_respect_disabled_tools():
 
     r = ToolSearchTool().run({"query": "generate_image"}, ctx)
 
-    assert "generate_image" not in r.content
+    body = json.loads(r.content)
+    assert "generate_image" not in [match["name"] for match in body["matches"]]
     assert "generate_image" not in a._deferred_index_block()
 
 

@@ -10,6 +10,7 @@ Built once per session (and after compaction) to maximize prefix-cache reuse.
 from __future__ import annotations
 
 import hashlib
+import json
 import platform
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,7 +70,18 @@ and `/learn`. To inspect live install/auth/tool/dashboard/service state, call
 
 """
 
-AGENTIC_GUIDANCE = """\
+TOOL_USE_ENFORCEMENT_MODELS = (
+    "gpt",
+    "codex",
+    "gemini",
+    "gemma",
+    "grok",
+    "glm",
+    "qwen",
+    "deepseek",
+)
+
+TOOL_USE_ENFORCEMENT_GUIDANCE = """\
 # Act — don't just describe (tool-use enforcement)
 You MUST use your tools to take action. Do NOT describe what you would do, or end a turn
 promising future action ("I'll run the tests", "let me check the file", "I would create…")
@@ -77,7 +89,9 @@ promising future action ("I'll run the tests", "let me check the file", "I would
 until the task is actually done; don't stop at a plan or a stub.
 Every response must either (a) contain tool calls that make progress, or (b) deliver the
 finished result. A response that only states intentions without acting is not acceptable.
+"""
 
+TOOL_VERIFICATION_GUIDANCE = """\
 # Use tools instead of answering from memory
 NEVER answer these from your own head — always use a tool:
 - arithmetic / math / hashes / encodings → `execute_code` or `bash`
@@ -88,7 +102,9 @@ NEVER answer these from your own head — always use a tool:
 - current facts (versions, news, docs) → `web_search` / `web_fetch`
 Your memory and USER profile describe the USER, not the machine you run on — verify the
 environment with tools rather than assuming.
+"""
 
+TASK_COMPLETION_GUIDANCE = """\
 # Finish the job
 When asked to build, run, or verify something, the deliverable is a WORKING artifact backed
 by real tool output — not a description of one. Don't stop after a stub or a single command;
@@ -96,8 +112,24 @@ keep going until you've actually exercised the code or produced the result, then
 real execution returned. If something fails and blocks the real path, say so directly and try
 an alternative. NEVER fabricate plausible-looking output (made-up data, invented file
 contents, synthesized API responses) — reporting a blocker honestly always beats inventing one.
-
 """
+
+PARALLEL_TOOL_CALL_GUIDANCE = """\
+# Parallel tool calls
+When several independent inspections, reads, searches, or safe checks are needed, batch them
+into one assistant turn instead of doing them one at a time. The runtime can execute safe
+independent batches concurrently; only serialize calls that depend on each other, target the
+same mutable path, or require approval ordering.
+"""
+
+AGENTIC_GUIDANCE = "\n\n".join(
+    (
+        TOOL_USE_ENFORCEMENT_GUIDANCE.strip(),
+        TOOL_VERIFICATION_GUIDANCE.strip(),
+        TASK_COMPLETION_GUIDANCE.strip(),
+        PARALLEL_TOOL_CALL_GUIDANCE.strip(),
+    )
+)
 
 TOOL_GUIDANCE = """\
 # Tools
@@ -152,6 +184,86 @@ PLATFORM_HINTS = {
 }
 
 
+def _config_bool(value, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "always"}:
+        return True
+    if text in {"0", "false", "no", "off", "never"}:
+        return False
+    return default
+
+
+def _should_inject_tool_use_enforcement(value, model: str | None) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (list, tuple, set, frozenset)):
+        model_lower = str(model or "").lower()
+        return any(str(item).lower() in model_lower for item in value if str(item).strip())
+    text = str(value if value is not None else "auto").strip().lower()
+    if text in {"true", "yes", "on", "always"}:
+        return True
+    if text in {"false", "no", "off", "never"}:
+        return False
+    model_lower = str(model or "").lower()
+    return any(fragment in model_lower for fragment in TOOL_USE_ENFORCEMENT_MODELS)
+
+
+def build_agentic_guidance(
+    config: Config | None,
+    *,
+    model: str | None = None,
+    tools_available: bool = True,
+) -> str:
+    parts: list[str] = []
+    if tools_available and _should_inject_tool_use_enforcement(
+        config.get("agent.tool_use_enforcement", "auto") if config else "auto",
+        model,
+    ):
+        parts.append(TOOL_USE_ENFORCEMENT_GUIDANCE.strip())
+    parts.append(TOOL_VERIFICATION_GUIDANCE.strip())
+    if _config_bool(
+        config.get("agent.task_completion_guidance", True) if config else True,
+        True,
+    ):
+        parts.append(TASK_COMPLETION_GUIDANCE.strip())
+    if tools_available and _config_bool(
+        config.get("agent.parallel_tool_call_guidance", True) if config else True,
+        True,
+    ):
+        parts.append(PARALLEL_TOOL_CALL_GUIDANCE.strip())
+    return "\n\n".join(part for part in parts if part)
+
+
+def _resolve_platform_hint(config: Config | None, platform_key: str, default_hint: str) -> str:
+    platform_key = str(platform_key or "").strip().lower()
+    if not platform_key:
+        return default_hint
+    overrides = config.get("platform_hints", {}) if config else {}
+    if not isinstance(overrides, dict) or not overrides:
+        return default_hint
+    spec = overrides.get(platform_key)
+    if spec is None:
+        return default_hint
+    if isinstance(spec, str):
+        extra = spec.strip()
+        return f"{default_hint}\n\n{extra}".strip() if extra else default_hint
+    if not isinstance(spec, dict):
+        return default_hint
+    replace_text = spec.get("replace")
+    if isinstance(replace_text, str) and replace_text.strip():
+        base = replace_text.strip()
+    else:
+        base = default_hint
+    append_text = spec.get("append")
+    if isinstance(append_text, str) and append_text.strip():
+        return f"{base}\n\n{append_text.strip()}".strip()
+    return base
+
+
 @dataclass(frozen=True)
 class PromptPart:
     tier: str
@@ -190,12 +302,53 @@ class PromptBuild:
     text: str
     parts: list[PromptPart]
 
+    def snapshot(self) -> dict:
+        """Stable, provider-independent fingerprint of stored prompt pieces.
+
+        Volatile provider-wire additions (memory/environment/retrieval) are
+        intentionally excluded so they can change per turn without making the
+        canonical system-prompt snapshot look different.
+        """
+        entries = [
+            {
+                "id": f"{p.tier}:{p.name}",
+                "tier": p.tier,
+                "name": p.name,
+                "source_name": p.source_name or p.name,
+                "source_path": p.source_path,
+                "hash": hashlib.sha256(p.text.encode("utf-8")).hexdigest()[:16],
+                "cache_stable": bool(p.cache_stable if p.cache_stable is not None else p.tier == "stable"),
+            }
+            for p in self.parts
+            if p.text.strip() and p.tier != "volatile"
+        ]
+
+        def _fingerprint(selected: list[dict]) -> str:
+            if not selected:
+                return ""
+            payload = json.dumps(selected, sort_keys=True, separators=(",", ":"))
+            return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+        stable_entries = [entry for entry in entries if entry["cache_stable"]]
+        context_entries = [entry for entry in entries if entry["tier"] == "context"]
+        skills_entry = next((entry for entry in entries if entry["name"] == "skills_index"), None)
+        return {
+            "version": 1,
+            "fingerprint": _fingerprint(entries),
+            "stable_fingerprint": _fingerprint(stable_entries),
+            "context_fingerprint": _fingerprint(context_entries),
+            "skills_fingerprint": skills_entry["hash"] if skills_entry else "",
+            "nonvolatile_part_count": len(entries),
+            "parts": entries,
+        }
+
     def metadata(self) -> dict:
         return {
             "hash": hashlib.sha256(self.text.encode("utf-8")).hexdigest()[:16],
             "chars": len(self.text),
             "tokens": estimate_tokens(self.text),
             "parts": [p.metadata() for p in self.parts],
+            "snapshot": self.snapshot(),
         }
 
 
@@ -242,6 +395,9 @@ class ContextBuilder:
         runtime_block: str = "",
         identity: str | None = None,
         platform: str | None = None,
+        model: str | None = None,
+        tools_available: bool = True,
+        include_volatile: bool = True,
     ) -> str:
         return self.build_with_metadata(
             skills_index=skills_index,
@@ -249,7 +405,23 @@ class ContextBuilder:
             runtime_block=runtime_block,
             identity=identity,
             platform=platform,
+            model=model,
+            tools_available=tools_available,
+            include_volatile=include_volatile,
         ).text
+
+    def build_volatile_context(self, *, memory_block: str = "") -> PromptBuild:
+        kept = [p for p in self._volatile_parts(memory_block) if p.text.strip()]
+        text = "\n\n---\n\n".join(p.text.strip() for p in kept)
+        return PromptBuild(text=text, parts=kept)
+
+    def _volatile_parts(self, memory_block: str = "") -> list[PromptPart]:
+        parts: list[PromptPart] = []
+        if memory_block:
+            parts.append(PromptPart("volatile", "memory", memory_block, "memory snapshot", cache_stable=False))
+        if _config_bool(self.config.get("agent.environment_probe", True), True):
+            parts.append(PromptPart("volatile", "environment", self._env_block(), "runtime environment", cache_stable=False))
+        return parts
 
     def build_with_metadata(
         self,
@@ -260,17 +432,27 @@ class ContextBuilder:
         coding_block: str = "",
         identity: str | None = None,
         platform: str | None = None,
+        model: str | None = None,
+        tools_available: bool = True,
+        include_volatile: bool = True,
     ) -> PromptBuild:
         # --- stable tier ---
+        agentic_guidance = build_agentic_guidance(
+            self.config,
+            model=model or self.config.get("model.default", ""),
+            tools_available=tools_available,
+        )
         parts = [
             PromptPart("stable", "identity", identity or DEFAULT_IDENTITY, "AEGIS built-in"),
-            PromptPart("stable", "agentic_guidance", AGENTIC_GUIDANCE, "AEGIS built-in"),
             PromptPart("stable", "aegis_capabilities", AEGIS_CAPABILITIES, "AEGIS built-in"),
             PromptPart("stable", "tool_guidance", TOOL_GUIDANCE, "AEGIS built-in"),
         ]
-        hint = PLATFORM_HINTS.get((platform or "").lower())
+        if agentic_guidance:
+            parts.insert(1, PromptPart("stable", "agentic_guidance", agentic_guidance, "AEGIS built-in"))
+        platform_key = (platform or "").lower().strip()
+        hint = _resolve_platform_hint(self.config, platform_key, PLATFORM_HINTS.get(platform_key, ""))
         if hint:                                  # channel-specific behavior (gateway mode)
-            parts.append(PromptPart("stable", f"platform:{platform}", hint, "platform hint", f"gateway:{platform}"))
+            parts.append(PromptPart("stable", f"platform:{platform_key}", hint, "platform hint", f"gateway:{platform_key}"))
         if skills_index:
             parts.append(PromptPart("stable", "skills_index", skills_index, "skills index"))
         if runtime_block:
@@ -308,9 +490,8 @@ class ContextBuilder:
             ))
 
         # --- volatile tier ---
-        if memory_block:
-            parts.append(PromptPart("volatile", "memory", memory_block, "memory snapshot", cache_stable=False))
-        parts.append(PromptPart("volatile", "environment", self._env_block(), "runtime environment", cache_stable=False))
+        if include_volatile:
+            parts.extend(self._volatile_parts(memory_block))
 
         kept = [p for p in parts if p.text.strip()]
         text = "\n\n---\n\n".join(p.text.strip() for p in kept)

@@ -10,7 +10,7 @@ list of shell commands in config under ``hooks.{event}``::
         - 'logger "aegis tool $AEGIS_HOOK_TOOL"'
 
 Recognised events: ``session_start``, ``user_prompt``, ``pre_tool``,
-``post_tool``, ``pre_api_request``, ``post_api_request``,
+``post_tool``, ``pre_tool_call``, ``post_tool_call``, ``pre_api_request``, ``post_api_request``,
 ``api_request_error``, ``session_stop``, ``session:compress``.
 
 Each command runs through the shell with the event and context exposed as
@@ -32,6 +32,8 @@ EVENTS: tuple[str, ...] = (
     "user_prompt",
     "pre_tool",
     "post_tool",
+    "pre_tool_call",
+    "post_tool_call",
     "pre_api_request",
     "post_api_request",
     "api_request_error",

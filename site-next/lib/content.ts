@@ -1,6 +1,6 @@
 export const systemStats = [
   { label: "Provider presets", value: "29", detail: "OpenAI-compatible, OAuth-capable, local, and hosted model routes share one config surface." },
-  { label: "Registered tools", value: "126", detail: "Generated from docs/tools-reference.md so public claims track the built-in registry." },
+  { label: "Registered tools", value: "128", detail: "Generated from docs/tools-reference.md so public claims track the built-in registry." },
   { label: "Bundled skills", value: "71", detail: "Reusable SKILL.md playbooks teach the agent repeatable workflows and verification habits." },
   { label: "Test functions", value: "1,750+", detail: "Offline regression tests, generated docs checks, and release gates are the local proof baseline." },
 ];

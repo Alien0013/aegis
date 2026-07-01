@@ -8,8 +8,9 @@ of re-deriving them tool call by tool call.
 The snapshot is captured **once per session** so the system-prompt prefix stays byte-stable
 for cache reuse — the working tree changes on every edit, so recomputing it each turn would
 bust the prefix cache. Because it can go stale, the brief tells the model to re-check git
-before trusting it. Gated by config ``agent.coding_context`` (default on); returns "" when the
-cwd is not a code workspace, so non-coding sessions never see the block.
+before trusting it. Gated by config ``agent.coding_context`` (auto/focus/on/off); returns ""
+when the cwd is not a code workspace, so non-coding sessions never see the block unless
+explicitly forced with ``on``.
 """
 
 from __future__ import annotations
@@ -39,6 +40,12 @@ _JS_LOCKFILES = (
     ("yarn.lock", "yarn"), ("package-lock.json", "npm"),
 )
 _VERIFY_TARGETS = ("test", "tests", "lint", "typecheck", "check", "build", "fmt", "format")
+_NON_CODING_SKILL_CATEGORIES = (
+    "apple", "communication", "cooking", "creative", "email", "finance",
+    "gaming", "gifs", "health", "media", "music", "note-taking",
+    "productivity", "shopping", "smart-home", "social-media", "travel",
+    "yuanbao",
+)
 
 _WEB_HINT = (
     "- For web/UI changes, close the loop with `web_verify` (headless browser): it loads the\n"
@@ -77,6 +84,31 @@ def _is_git_repo(cwd: Path) -> bool:
 
 def _detect_markers(cwd: Path) -> list[str]:
     return [m for m in _PROJECT_MARKERS if (cwd / m).exists()]
+
+
+def _coding_mode(config: Config | dict[str, Any] | None) -> str:
+    """Return normalized agent.coding_context mode (auto/focus/on/off)."""
+    raw: Any = "auto"
+    if isinstance(config, Config):
+        raw = config.get("agent.coding_context", "auto")
+    elif isinstance(config, dict):
+        raw = ((config.get("agent") or {}) if isinstance(config.get("agent"), dict) else {}).get(
+            "coding_context", "auto"
+        )
+    if isinstance(raw, bool):
+        return "auto" if raw else "off"
+    mode = str(raw or "auto").strip().lower()
+    if mode in {"focus", "strict", "lean"}:
+        return "focus"
+    if mode in {"on", "true", "yes", "1", "always"}:
+        return "on"
+    if mode in {"off", "false", "no", "0", "never"}:
+        return "off"
+    return "auto"
+
+
+def _is_code_workspace(cwd: Path) -> bool:
+    return _is_git_repo(cwd) or bool(_detect_markers(cwd))
 
 
 def _project_root(cwd: Path) -> Path | None:
@@ -255,15 +287,16 @@ def _layout(cwd: Path, limit: int = 24) -> str:
 
 def coding_workspace_block(cwd: Path | str, config: Config | None = None) -> str:
     """Operating brief + one-time workspace snapshot, or "" when the cwd is not a code
-    workspace or the feature is disabled (``agent.coding_context``, default on)."""
-    if config is not None and not config.get("agent.coding_context", True):
+    workspace or the feature is disabled (``agent.coding_context`` auto/focus/on/off)."""
+    mode = _coding_mode(config)
+    if mode == "off":
         return ""
     cwd = Path(cwd).expanduser()
     if not cwd.is_dir():
         return ""
     is_repo = _is_git_repo(cwd)
     markers = _detect_markers(cwd)
-    if not is_repo and not markers:
+    if not is_repo and not markers and mode != "on":
         return ""                       # not a code workspace — stay out of the prompt
     brief = _BRIEF
     if any((cwd / m).exists() for m in _WEB_MARKERS):
@@ -279,6 +312,19 @@ def coding_workspace_block(cwd: Path | str, config: Config | None = None) -> str
         body.append("- project files: " + ", ".join(markers))
         blocks.append("\n".join(body))
     return "\n\n".join(blocks)
+
+
+def coding_compact_skill_categories(
+    cwd: Path | str,
+    config: Config | dict[str, Any] | None = None,
+) -> frozenset[str]:
+    """Skill categories to render as names-only under focus coding posture."""
+    if _coding_mode(config) != "focus":
+        return frozenset()
+    cwd = Path(cwd).expanduser()
+    if not cwd.is_dir() or not _is_code_workspace(cwd):
+        return frozenset()
+    return frozenset(_NON_CODING_SKILL_CATEGORIES)
 
 
 def _rule_target_dir(target: Path) -> Path:

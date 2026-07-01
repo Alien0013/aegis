@@ -140,6 +140,17 @@ class BasePlatformAdapter:
         if not hasattr(self, "_clarify_waiters"):
             self._clarify_waiters = {}
 
+    @staticmethod
+    def _normalize_approval_choice(answer: str) -> str:
+        text = str(answer or "").strip().lower()
+        if text in {"approve", "approved", "allow", "allowed", "yes", "y", "ok"}:
+            return "approve"
+        if text in {"always", "approve always", "allow always"}:
+            return "always"
+        if text in {"deny", "denied", "reject", "rejected", "no", "n"}:
+            return "deny"
+        return text
+
     def _conversation_key(self, ev: MessageEvent) -> str:
         cb = getattr(self, "_conversation_key_cb", None)
         if cb is not None:
@@ -584,6 +595,158 @@ class BasePlatformAdapter:
                 if not waiters:
                     self._clarify_waiters.pop(key, None)
 
+    def notify_pending_approval(self, ev: MessageEvent, approval_data: dict) -> str:
+        """Surface a shared pending approval queue entry on this adapter.
+
+        Unlike ``ask_exec_approval()``, this does not block on the adapter's own
+        event. Inbound approval replies resolve ``aegis.tools.thread_context``'s
+        FIFO queue after the same prompt/user/session checks used for clarify
+        prompts.
+        """
+        self._ensure_inbound_queue()
+        key = self._conversation_key(ev)
+        session_key = str(
+            approval_data.get("session_key")
+            or ev.session_key
+            or (ev.metadata or {}).get("session_key")
+            or ""
+        )
+        if not session_key:
+            raise ValueError("pending approval requires a session_key")
+        prompt_id = self._new_prompt_id("exec_approval")
+        waiter = {
+            "event": None,
+            "answer": "",
+            "choices": ["approve", "always", "deny"],
+            "prompt_id": prompt_id,
+            "prompt_kind": "exec_approval",
+            "user_id": ev.user_id or "",
+            "session_key": session_key,
+            "shared_approval_queue": True,
+        }
+        with self._qlock:
+            self._clarify_waiters.setdefault(key, []).append(waiter)
+        try:
+            rendered = str(approval_data.get("prompt") or approval_data.get("target") or "").strip()
+            if rendered:
+                rendered += "\n"
+            rendered += "Reply approve, always, or deny."
+            metadata = self._prompt_metadata(ev, prompt_id=prompt_id, prompt_kind="exec_approval")
+            metadata["session_key"] = session_key
+            metadata["prompt_session_key"] = session_key
+            if approval_data.get("tool_call_id"):
+                metadata["tool_call_id"] = str(approval_data.get("tool_call_id") or "")
+            if approval_data.get("turn_id"):
+                metadata["turn_id"] = str(approval_data.get("turn_id") or "")
+            self.send_exec_approval(
+                ev.chat_id,
+                rendered,
+                metadata=metadata,
+            )
+            return prompt_id
+        except Exception:
+            with self._qlock:
+                waiters = self._clarify_waiters.get(key, [])
+                if waiter in waiters:
+                    waiters.remove(waiter)
+                if not waiters:
+                    self._clarify_waiters.pop(key, None)
+            raise
+
+    def clear_pending_approval_prompts(self, session_key: str) -> int:
+        """Drop shared approval prompt waiters for *session_key* after turn cleanup."""
+        if not session_key:
+            return 0
+        self._ensure_inbound_queue()
+        removed = 0
+        with self._qlock:
+            for key, waiters in list(self._clarify_waiters.items()):
+                keep = []
+                for waiter in waiters:
+                    if (
+                        waiter.get("shared_approval_queue")
+                        and str(waiter.get("session_key") or "") == str(session_key)
+                    ):
+                        removed += 1
+                    else:
+                        keep.append(waiter)
+                if keep:
+                    self._clarify_waiters[key] = keep
+                else:
+                    self._clarify_waiters.pop(key, None)
+        return removed
+
+    def _resolve_shared_pending_approval(self, ev: MessageEvent) -> bool:
+        try:
+            from ..tools.thread_context import (
+                all_pending_approvals,
+                resolve_pending_approval,
+                resolve_pending_approval_by_prompt_id,
+            )
+        except Exception:  # noqa: BLE001
+            return False
+
+        def payload_prompt_id(data: dict) -> str:
+            return str(
+                data.get("prompt_id")
+                or data.get("callback_prompt_id")
+                or data.get("action_prompt_id")
+                or ""
+            ).strip()
+
+        def payload_session_key(data: dict) -> str:
+            return str(data.get("prompt_session_key") or data.get("session_key") or "").strip()
+
+        def payload_user_id(data: dict) -> str:
+            return str(data.get("prompt_user_id") or data.get("user_id") or "").strip()
+
+        payloads = all_pending_approvals()
+        if not payloads:
+            return False
+
+        incoming_prompt = self._event_prompt_id(ev)
+        incoming_session = str(ev.session_key or (ev.metadata or {}).get("session_key") or "").strip()
+        selected: dict | None = None
+        if incoming_prompt:
+            selected = next(
+                (row for row in payloads if payload_prompt_id(row) == incoming_prompt),
+                None,
+            )
+        if selected is None and incoming_session:
+            selected = next(
+                (row for row in payloads if payload_session_key(row) == incoming_session),
+                None,
+            )
+        if selected is None:
+            return False
+
+        waiter = {
+            "answer": "",
+            "choices": ["approve", "always", "deny"],
+            "prompt_id": payload_prompt_id(selected),
+            "prompt_kind": str(selected.get("prompt_kind") or "exec_approval"),
+            "user_id": payload_user_id(selected),
+            "session_key": payload_session_key(selected),
+            "shared_approval_queue": True,
+        }
+        rejection = self._prompt_rejection_reason(ev, waiter)
+        if rejection:
+            self._deliver_reply(ev, rejection, None)
+            return True
+
+        choice = self._normalize_approval_choice(
+            self._normalize_waiter_answer(ev.text or "", waiter)
+        )
+        session_key = str(waiter.get("session_key") or "")
+        prompt_id = str(waiter.get("prompt_id") or "")
+        if incoming_prompt and prompt_id:
+            resolved = resolve_pending_approval_by_prompt_id(session_key, prompt_id, choice)
+        else:
+            resolved = resolve_pending_approval(session_key, choice)
+        if resolved <= 0:
+            self._deliver_reply(ev, "That approval is no longer active.", None)
+        return True
+
     def _resolve_clarify_waiter(self, ev: MessageEvent) -> bool:
         self._ensure_inbound_queue()
         if getattr(ev, "internal", False):
@@ -593,7 +756,7 @@ class BasePlatformAdapter:
             waiters = self._clarify_waiters.get(key) or []
             waiter = waiters[0] if waiters else None
         if waiter is None:
-            return False
+            return self._resolve_shared_pending_approval(ev)
         rejection = self._prompt_rejection_reason(ev, waiter)
         if rejection:
             if self._event_prompt_id(ev):
@@ -607,6 +770,18 @@ class BasePlatformAdapter:
             if not waiters:
                 self._clarify_waiters.pop(key, None)
         waiter["answer"] = self._normalize_waiter_answer(ev.text or "", waiter)
+        if waiter.get("shared_approval_queue"):
+            choice = self._normalize_approval_choice(str(waiter.get("answer") or ""))
+            waiter["answer"] = choice
+            try:
+                from ..tools.thread_context import resolve_pending_approval
+
+                resolved = resolve_pending_approval(str(waiter.get("session_key") or ""), choice)
+            except Exception:  # noqa: BLE001
+                resolved = 0
+            if resolved <= 0:
+                self._deliver_reply(ev, "That approval is no longer active.", None)
+            return True
         waiter["event"].set()
         return True
 

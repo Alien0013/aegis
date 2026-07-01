@@ -36,6 +36,8 @@ class ToolResult:
                                     "refused")):
                 return "refused"
             return "error"
+        if "<persisted-output>" in c or "truncated to protect context" in c:
+            return "truncated"
         if "[truncated]" in c or "…[truncated]" in c or "…[truncated]…" in self.content:
             return "truncated"
         if not self.content.strip() or "(no output)" in c:
@@ -62,6 +64,7 @@ class ToolContext:
     session: Any = None         # Session
     agent: Any = None           # Agent (for subagent spawn)
     task_id: str = ""           # stable execution-environment id for this run/task
+    result_storage_env: Any = None  # optional execution environment for large result persistence
     fs: Any = None              # optional filesystem delegate (ACP: read/write via the editor)
     # callback(prompt:str)->bool used when a permission decision needs the user
     approver: Callable[[str], bool] | None = None
@@ -183,6 +186,7 @@ class Tool:
     required_env: list[str] = []
     required_auth: list[str] = []
     output_limits: dict[str, Any] = {}
+    max_result_size_chars: int | float | None = None
     risk_level: str = ""
 
     def run(self, args: dict[str, Any], ctx: ToolContext) -> ToolResult:  # pragma: no cover
@@ -274,11 +278,22 @@ def _tool_risk(tool: Tool) -> str:
 def _tool_output_limits(tool: Tool) -> dict[str, Any]:
     raw = getattr(tool, "output_limits", None)
     if isinstance(raw, dict) and raw:
-        return dict(raw)
+        out = dict(raw)
+        if "max_result_size_chars" not in out:
+            result_cap = getattr(tool, "max_result_size_chars", None)
+            if result_cap is not None:
+                out["max_result_size_chars"] = result_cap
+        return out
     max_chars = getattr(tool, "max_output_chars", None) or getattr(tool, "MAX_OUTPUT_CHARS", None)
+    out: dict[str, Any]
     if max_chars:
-        return {"max_chars": int(max_chars), "policy": "truncate"}
-    return {"max_chars": "config:tools.max_output_chars", "policy": "truncate"}
+        out = {"max_chars": int(max_chars), "policy": "truncate"}
+    else:
+        out = {"max_chars": "config:tools.max_output_chars", "policy": "truncate"}
+    result_cap = getattr(tool, "max_result_size_chars", None)
+    if result_cap is not None:
+        out["max_result_size_chars"] = result_cap
+    return out
 
 
 def tool_metadata(tool: Tool) -> dict[str, Any]:

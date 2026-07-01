@@ -11,6 +11,7 @@ API keys win when both are configured because OAuth scopes can be identity-only.
 
 from __future__ import annotations
 
+import copy
 import difflib
 import os
 import time
@@ -40,6 +41,7 @@ class ProviderSpec:
     oauth: OAuthConfig | None = None
     max_tokens: int = 8192
     extra_headers: dict[str, str] = field(default_factory=dict)
+    request_overrides: dict = field(default_factory=dict)
     models: list[str] = field(default_factory=list)
     discover_models: bool = True
 
@@ -59,6 +61,13 @@ class OAuthCatalogEntry:
 # --------------------------------------------------------------------------- #
 # Anthropic (Claude) public OAuth client used by first-party CLI tooling.
 # Client IDs / endpoints can change; override via config if needed.
+_ANTHROPIC_COMMON_BETAS = (
+    "interleaved-thinking-2025-05-14",
+    "fine-grained-tool-streaming-2025-05-14",
+)
+_ANTHROPIC_OAUTH_BETAS = (*_ANTHROPIC_COMMON_BETAS, "claude-code-20250219", "oauth-2025-04-20")
+
+
 ANTHROPIC_OAUTH = OAuthConfig(
     provider="anthropic",
     client_id="9d1c250a-e61b-44d9-88ed-5944d1962f5e",
@@ -72,7 +81,11 @@ ANTHROPIC_OAUTH = OAuthConfig(
     # claude.ai requires `code=true` on the authorize URL or it returns "Invalid request
     # format" (this is the manual code-display flow the Claude CLI uses).
     extra_authorize_params={"code": "true"},
-    api_extra_headers={"anthropic-beta": "oauth-2025-04-20"},
+    api_extra_headers={
+        "anthropic-beta": ",".join(_ANTHROPIC_OAUTH_BETAS),
+        "user-agent": "claude-cli/2.1.74 (external, cli)",
+        "x-app": "cli",
+    },
 )
 
 # OpenAI (ChatGPT / Codex) public OAuth client. Login + token storage works, but
@@ -133,6 +146,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "anthropic": ProviderSpec(
         "anthropic", ApiMode.ANTHROPIC_MESSAGES, "https://api.anthropic.com",
         "claude-sonnet-4-6", 200_000, ["ANTHROPIC_API_KEY"], "anthropic", ANTHROPIC_OAUTH,
+        extra_headers={"anthropic-beta": ",".join(_ANTHROPIC_COMMON_BETAS)},
     ),
     "openai": ProviderSpec(
         "openai", ApiMode.CHAT_COMPLETIONS, "https://api.openai.com/v1",
@@ -356,6 +370,25 @@ def _transport_for(api_mode: ApiMode) -> ProviderTransport:
     return ChatCompletionsTransport()
 
 
+def _string_headers(value) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): str(v) for k, v in value.items() if k and v is not None}
+
+
+def _merge_mapping(base: dict, addition: dict) -> dict:
+    for key, value in addition.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_mapping(base[key], value)
+        else:
+            base[key] = copy.deepcopy(value)
+    return base
+
+
+def _request_overrides_from(value) -> dict:
+    return copy.deepcopy(value) if isinstance(value, dict) else {}
+
+
 def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
     out: dict[str, ProviderSpec] = {}
     for c in config.get("custom_providers", []) or []:
@@ -380,6 +413,10 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
                 or c.get("api_key_env")
                 or c.get("api_key_env_var")
             )
+            request_overrides: dict = {}
+            if isinstance(c.get("extra_body"), dict):
+                request_overrides["extra_body"] = copy.deepcopy(c["extra_body"])
+            _merge_mapping(request_overrides, _request_overrides_from(c.get("request_overrides")))
             out[c["name"]] = ProviderSpec(
                 name=c["name"],
                 api_mode=ApiMode(c.get("api_mode", "chat_completions")),
@@ -388,6 +425,8 @@ def _custom_specs(config: cfg.Config) -> dict[str, ProviderSpec]:
                 context_length=int(c.get("context_length", 64_000)),
                 env_vars=[env_var] if env_var else [],
                 auth_scheme=c.get("auth_scheme", "none" if not env_var else "bearer"),
+                extra_headers=_string_headers(c.get("extra_headers") or c.get("default_headers")),
+                request_overrides=request_overrides,
                 models=models,
                 discover_models=discover_models,
             )
@@ -793,7 +832,11 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
 
     auth = _resolve_auth(spec, config=config)
     transport = _transport_for(api_mode)
-    return Provider(
+    extra_headers = dict(spec.extra_headers)
+    extra_headers.update(_string_headers(config.get("model.default_headers")))
+    request_overrides = _request_overrides_from(spec.request_overrides)
+    _merge_mapping(request_overrides, _request_overrides_from(config.get("model.request_overrides")))
+    provider = Provider(
         name=spec.name,
         transport=transport,
         auth=auth,
@@ -802,8 +845,10 @@ def build_provider(config: cfg.Config, *, model: str | None = None, name: str | 
         context_length=context_length,
         api_mode=api_mode,
         max_tokens=spec.max_tokens,
-        extra_headers=dict(spec.extra_headers),
+        extra_headers=extra_headers,
     )
+    provider.request_overrides = request_overrides
+    return provider
 
 
 def build_aux_provider(

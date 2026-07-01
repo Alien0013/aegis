@@ -244,8 +244,7 @@ def test_governance_strips_interrupted_tool_replay_blocks():
     out = governance.normalize(msgs)
     pairs = [(m.role, m.tool_call_id, [tc.id for tc in m.tool_calls], m.content) for m in out]
 
-    assert ("user", None, [], "start") in pairs
-    assert ("user", None, [], "next real message") in pairs
+    assert ("user", None, [], "start\n\nnext real message") in pairs
     assert not any("c1" in ids or tool_id == "c1" for _role, tool_id, ids, _content in pairs)
     assert not any(tool_id == "ghost" for _role, tool_id, _ids, _content in pairs)
     assert any(ids == ["c2"] for _role, _tool_id, ids, _content in pairs)

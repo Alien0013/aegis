@@ -6,7 +6,7 @@ from typing import Any
 
 from aegis.tools.base import Tool, ToolContext, ToolResult
 from aegis.tools.registry import ToolRegistry, default_registry
-from aegis.tools.schema_validation import validate_tool_registry, validate_tool_schema
+from aegis.tools.schema_validation import coerce_tool_arguments, validate_tool_registry, validate_tool_schema
 
 
 class _SyntheticTool(Tool):
@@ -151,6 +151,134 @@ def test_audio_analyze_alias_delegates_to_media_tool(monkeypatch, tmp_path):
     assert result.is_error is False
     assert "hello audio" in result.content
     assert seen["path"] == str(media)
+
+
+def test_coerce_tool_arguments_coerces_scalar_strings():
+    out = coerce_tool_arguments(
+        {
+            "count": "42",
+            "ratio": "3.5",
+            "enabled": "false",
+            "integerish_number": "7",
+        },
+        {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "ratio": {"type": "number"},
+                "enabled": {"type": "boolean"},
+                "integerish_number": {"type": "number"},
+            },
+        },
+    )
+
+    assert out == {
+        "count": 42,
+        "ratio": 3.5,
+        "enabled": False,
+        "integerish_number": 7,
+    }
+
+
+def test_coerce_tool_arguments_coerces_array_and_object_strings():
+    out = coerce_tool_arguments(
+        {
+            "items": '["a", 2]',
+            "single": "one",
+            "limit": 3,
+            "settings": '{"mode": "fast"}',
+            "bad_settings": "[1, 2]",
+        },
+        {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array"},
+                "single": {"type": "array"},
+                "limit": {"type": "array"},
+                "settings": {"type": "object"},
+                "bad_settings": {"type": "object"},
+            },
+        },
+    )
+
+    assert out["items"] == ["a", 2]
+    assert out["single"] == ["one"]
+    assert out["limit"] == [3]
+    assert out["settings"] == {"mode": "fast"}
+    assert out["bad_settings"] == "[1, 2]"
+
+
+def test_coerce_tool_arguments_coerces_nullable_null_strings():
+    out = coerce_tool_arguments(
+        {
+            "maybe_count": "null",
+            "maybe_payload": "NULL",
+            "maybe_flag": "null",
+            "plain": "null",
+        },
+        {
+            "type": "object",
+            "properties": {
+                "maybe_count": {"type": ["integer", "null"]},
+                "maybe_payload": {"anyOf": [{"type": "object"}, {"type": "null"}]},
+                "maybe_flag": {"type": "boolean", "nullable": True},
+                "plain": {"type": "string"},
+            },
+        },
+    )
+
+    assert out == {
+        "maybe_count": None,
+        "maybe_payload": None,
+        "maybe_flag": None,
+        "plain": "null",
+    }
+
+
+def test_coerce_tool_arguments_preserves_unknown_and_invalid_values():
+    args = {
+        "unknown": "42",
+        "count": "3.14",
+        "ratio": "nan",
+        "enabled": "yes",
+        "settings": '{"missing":',
+    }
+
+    out = coerce_tool_arguments(
+        args,
+        {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer"},
+                "ratio": {"type": "number"},
+                "enabled": {"type": "boolean"},
+                "settings": {"type": "object"},
+            },
+        },
+    )
+
+    assert out == args
+
+
+def test_coerce_tool_arguments_returns_copy_without_mutating_input():
+    args = {"items": '["a"]', "unknown": {"nested": True}}
+    original = dict(args)
+
+    out = coerce_tool_arguments(
+        args,
+        {
+            "type": "object",
+            "properties": {
+                "items": {"type": "array"},
+            },
+        },
+    )
+
+    assert out is not args
+    assert args == original
+    assert args["items"] == '["a"]'
+    assert out["items"] == ["a"]
+    assert out["unknown"] == {"nested": True}
 
 
 def test_schema_validator_reports_required_field_mismatches():

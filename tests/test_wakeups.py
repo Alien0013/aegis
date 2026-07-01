@@ -83,13 +83,17 @@ def test_agent_run_folds_wakeups(monkeypatch):
     seen = {}
 
     def fake_conversation(a, on_event=None):
-        seen["user"] = a.session.messages[-1].content
+        from aegis.agent.loop import _provider_wire_messages
+        seen["user"] = _provider_wire_messages(a, a.session.messages)[-1].content
+        seen["canonical"] = a.session.messages[-1].content
         return Message.assistant("ok")
 
     monkeypatch.setattr("aegis.agent.agent.run_conversation", fake_conversation)
     agent.run("continue please")
     assert "<background_completions>" in seen["user"]
     assert "proc_9" in seen["user"] and "continue please" in seen["user"]
+    assert seen["canonical"] == "continue please"
+    assert "<background_completions>" not in seen["canonical"]
 
 
 def test_agent_run_keeps_other_session_wakeups_queued(monkeypatch):
@@ -106,7 +110,9 @@ def test_agent_run_keeps_other_session_wakeups_queued(monkeypatch):
     seen = {}
 
     def fake_conversation(a, on_event=None):
-        seen["user"] = a.session.messages[-1].content
+        from aegis.agent.loop import _provider_wire_messages
+        seen["user"] = _provider_wire_messages(a, a.session.messages)[-1].content
+        seen["canonical"] = a.session.messages[-1].content
         return Message.assistant("ok")
 
     monkeypatch.setattr("aegis.agent.agent.run_conversation", fake_conversation)
@@ -114,6 +120,7 @@ def test_agent_run_keeps_other_session_wakeups_queued(monkeypatch):
 
     assert "proc-a" in seen["user"]
     assert "proc-b" not in seen["user"]
+    assert seen["canonical"] == "continue please"
     assert [n["title"] for n in wakeups.drain_wakeups()] == ["proc-b"]
 
 
@@ -129,7 +136,9 @@ def test_agent_run_can_skip_wakeups_once(monkeypatch):
     seen = {}
 
     def fake_conversation(a, on_event=None):
-        seen["user"] = a.session.messages[-1].content
+        from aegis.agent.loop import _provider_wire_messages
+        seen["user"] = _provider_wire_messages(a, a.session.messages)[-1].content
+        seen["canonical"] = a.session.messages[-1].content
         return Message.assistant("ok")
 
     monkeypatch.setattr("aegis.agent.agent.run_conversation", fake_conversation)
@@ -138,4 +147,5 @@ def test_agent_run_can_skip_wakeups_once(monkeypatch):
 
     assert "<background_completions>" not in seen["user"]
     assert "synthetic process event" in seen["user"]
+    assert seen["canonical"] == "synthetic process event"
     assert wakeups.drain_wakeups()[0]["source"] == "process"

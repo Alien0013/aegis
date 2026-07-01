@@ -110,7 +110,8 @@ class SurfaceRunner:
         meta: dict[str, Any] | None = None,
     ) -> Session:
         if session_id:
-            session = self.store.load(session_id) or Session(id=session_id, title=title or session_id)
+            resolved = self.store.resolve_resume_session_id(session_id)
+            session = self.store.load(resolved or session_id) or Session(id=session_id, title=title or session_id)
         else:
             session = Session.create(title=title or "")
         if history is not None:

@@ -33,8 +33,8 @@ jobs:
             desktop/package-lock.json
       - name: Install web and desktop dependencies
         run: |
-          (cd web && npm ci)
-          (cd desktop && npm ci)
+          (cd web && npm ci --workspaces=false)
+          (cd desktop && npm ci --workspaces=false)
       - name: Full release gate
         run: pip install -e ".[dev]" && bash scripts/verify_all.sh
 
@@ -97,7 +97,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y rpm
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm ci
+        run: npm ci --workspaces=false
       - name: Stage desktop backend venv
         run: |
           python -m venv desktop/build/ci-backend
@@ -156,7 +156,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm ci
+        run: npm ci --workspaces=false
       - name: Stage desktop backend venv
         shell: pwsh
         run: |
@@ -230,7 +230,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm ci
+        run: npm ci --workspaces=false
       - name: Stage desktop backend venv
         run: |
           python -m venv desktop/build/ci-backend

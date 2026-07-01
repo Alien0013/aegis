@@ -39,6 +39,18 @@ def test_loop_strips_thinking_on_signature_400_then_succeeds(monkeypatch):
     from aegis.session import Session
 
     agent = Agent.create(Config.load(), session=Session.create())
+    agent.provider = type(
+        "ReadyProvider",
+        (),
+        {
+            "name": "fake",
+            "model": "fake-model",
+            "api_mode": None,
+            "context_length": 200_000,
+            "auth": None,
+            "complete": lambda self, messages, **kwargs: None,
+        },
+    )()
     agent.session.messages = [
         Message.system("s"),
         Message.user("q1"),

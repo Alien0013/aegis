@@ -6,7 +6,12 @@ from __future__ import annotations
 import subprocess
 from typing import Any, cast
 
-from aegis.agent.coding_context import coding_workspace_block, project_facts_for, subdirectory_rule_hint
+from aegis.agent.coding_context import (
+    coding_compact_skill_categories,
+    coding_workspace_block,
+    project_facts_for,
+    subdirectory_rule_hint,
+)
 from aegis.config import Config
 
 
@@ -77,6 +82,19 @@ def test_disabled_by_config(tmp_path):
     assert coding_workspace_block(tmp_path, cfg) == ""
     # default (flag absent) is on
     assert coding_workspace_block(tmp_path, Config({})) != ""
+
+
+def test_focus_mode_compacts_non_coding_skill_categories_only_in_code_workspace(tmp_path):
+    cfg = Config({"agent": {"coding_context": "focus"}})
+
+    assert coding_compact_skill_categories(tmp_path, cfg) == frozenset()
+
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='demo'\n", encoding="utf-8")
+    compact = coding_compact_skill_categories(tmp_path, cfg)
+
+    assert "creative" in compact
+    assert "software-development" not in compact
+    assert coding_compact_skill_categories(tmp_path, Config({"agent": {"coding_context": "auto"}})) == frozenset()
 
 
 def test_status_truncation(tmp_path):

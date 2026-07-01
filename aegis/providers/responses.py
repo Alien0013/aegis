@@ -9,6 +9,7 @@ opt-in provider.
 from __future__ import annotations
 
 import json
+import hashlib
 from typing import Any
 
 import httpx
@@ -16,7 +17,12 @@ import httpx
 from ..types import LLMResponse, Message, ToolCall, ToolSchema, Usage
 from .auth import AuthProvider
 from .base import ApiMode, OnDelta, ProviderTransport
-from .chat_completions import _raise_for_status
+from .chat_completions import (
+    _raise_for_status,
+    apply_request_overrides,
+    request_extra_headers,
+    request_timeout,
+)
 from .schema import sanitize as _sanitize_schema
 
 DEFAULT_INSTRUCTIONS = "You are AEGIS, a careful coding agent. Follow the user's instructions."
@@ -38,6 +44,17 @@ def _to_text_format(response_format: dict) -> dict:
                 out[key] = inner[key]
         return out
     return fmt
+
+
+def _content_cache_key(instructions: str, tools: list[dict[str, Any]] | None) -> str:
+    if not instructions and not tools:
+        return ""
+    raw = json.dumps(
+        {"instructions": instructions or "", "tools": tools or []},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:32]
 
 
 class ResponsesTransport(ProviderTransport):
@@ -138,10 +155,18 @@ class ResponsesTransport(ProviderTransport):
         on_reasoning: OnDelta | None = None,
         service_tier: str = "",
         response_format: dict | None = None,
+        request_overrides: dict | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/responses"
-        headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
+        headers = {
+            "Content-Type": "application/json",
+            **(extra_headers or {}),
+            **request_extra_headers(request_overrides),
+            **auth.headers(),
+        }
+        timeout = request_timeout(timeout, request_overrides)
         is_codex_backend = self._requires_stream(base_url)
+        is_xai = self._is_xai_responses(base_url, model)
         wire_stream = stream or is_codex_backend
         if is_codex_backend:
             # The Codex backend routes prompt-cache *scope* by these request headers
@@ -198,7 +223,7 @@ class ResponsesTransport(ProviderTransport):
         if not is_codex_backend:
             payload["max_output_tokens"] = max_tokens
         clean_service_tier = str(service_tier or "").strip()
-        if clean_service_tier and not self._is_xai_responses(base_url, model):
+        if clean_service_tier and not is_xai:
             payload["service_tier"] = clean_service_tier
         eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
                "xhigh": "high"}.get(reasoning)
@@ -211,6 +236,11 @@ class ResponsesTransport(ProviderTransport):
             payload["tools"] = wire_tools
         if response_format:                       # structured output -> Responses `text.format`
             payload["text"] = {"format": _to_text_format(response_format)}
+        apply_request_overrides(payload, request_overrides, strip_service_tier=is_xai)
+        if is_xai and session_id:
+            headers["x-grok-conv-id"] = session_id
+            cache_key = _content_cache_key(payload.get("instructions", ""), wire_tools) or session_id
+            payload.setdefault("prompt_cache_key", cache_key)
 
         if wire_stream:
             resp = self._stream(url, headers, payload, on_delta, timeout, on_response_id, on_reasoning)

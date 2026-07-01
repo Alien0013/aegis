@@ -1,6 +1,6 @@
 # Tools & Permissions
 
-126 registered tools cover files, search, shell, processes, web, HTTP, downloads,
+128 registered tools cover files, search, shell, processes, web, HTTP, downloads,
 browser automation, UI verification, computer control, image generation, speech,
 code execution, subagents, mixture-of-agents, LSP, GitHub, memory, skills, session
 recall, repo maps, semantic code search, cron jobs, dependency audit, agent state,

@@ -47,14 +47,14 @@ cli = []
 cron = []
 pty = []
 web = []
-mcp = []
+mcp = ["mcp>=1.28,<2"]
 acp = []
 anthropic = []
 google = []
 youtube = []
 azure-identity = []
 bedrock = []
-daytona = []
+daytona = ["daytona>=0.192,<1"]
 edge-tts = []
 exa = []
 fal = []
@@ -62,7 +62,7 @@ firecrawl = []
 locales = []
 markers = []
 mistral = []
-modal = []
+modal = ["modal>=1.5,<2"]
 nemo-relay = []
 parallel-web = []
 plugins = []
@@ -82,7 +82,7 @@ wecom = []
 all = [
     "playwright>=1.46,<2", "pyautogui>=0.9.54,<1", "Pillow>=10,<12", "discord.py>=2.4,<3",
     "slack_bolt>=1.21,<2", "matrix-nio>=0.24,<0.26", "honcho-ai>=1.0,<2", "mem0ai>=0.1,<0.3",
-    "tiktoken>=0.7,<1",
+    "tiktoken>=0.7,<1", "mcp>=1.28,<2", "daytona>=0.192,<1", "modal>=1.5,<2",
 ]
 
 [project.scripts]
@@ -105,6 +105,9 @@ filterwarnings = [
 
 [tool.setuptools.packages.find]
 include = ["aegis*", "agent*"]
+
+[tool.setuptools]
+license-files = ["LICENSE"]
 
 [tool.setuptools.package-data]
 aegis = ["builtin_skills/**/*", "desktop_app/**/*", "static/*", "static/web_dist/**/*",

@@ -111,6 +111,49 @@ def _config_location(out: Output) -> None:
     out("   Edit these directly or use `aegis config edit`.")
 
 
+def setup_guidance_payload(reason: str | None = None) -> dict[str, object]:
+    """Return non-secret setup guidance for headless or scripted sessions."""
+
+    return {
+        "object": "aegis.setup.guidance",
+        "ok": False,
+        "reason": reason or "interactive setup needs a real terminal",
+        "commands": [
+            "aegis setup",
+            "aegis setup --non-interactive --accept-risk --json",
+            "aegis setup model --non-interactive --accept-risk --json --provider openai --auth skip",
+            "aegis doctor",
+        ],
+        "environment": {
+            "skip_first_run": "AEGIS_SKIP_FIRST_RUN=1",
+            "config_home": "AEGIS_HOME=/path/to/aegis-home",
+        },
+        "notes": [
+            "Use interactive setup when you want guided provider, tool, skill, channel, and service selection.",
+            "Use noninteractive setup from installers, CI, SSH bootstrap, or other headless shells.",
+            "Use --auth api-key only after the provider API key is already present in the environment.",
+        ],
+    }
+
+
+def print_noninteractive_setup_guidance(reason: str | None = None, output_func: Output = print) -> None:
+    """Print concise setup guidance without reading stdin."""
+
+    data = setup_guidance_payload(reason)
+    output_func("")
+    output_func("AEGIS setup needs an interactive terminal.")
+    output_func(f"Reason: {data['reason']}")
+    output_func("")
+    output_func("Run one of these:")
+    for command in data["commands"]:
+        output_func(f"  {command}")
+    output_func("")
+    output_func("Environment switches:")
+    env = data["environment"]
+    output_func(f"  {env['skip_first_run']}      # bypass first-run guard")
+    output_func(f"  {env['config_home']}  # choose a local config home")
+
+
 MODEL_PRESETS: dict[str, list[tuple[str, str]]] = {
     "codex": [
         ("gpt-5.5", "GPT-5.5 Codex (most capable)"),

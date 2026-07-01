@@ -67,7 +67,7 @@ def _strip_historical_media(messages: list[Message]) -> list[Message]:
 
 def _prune_tool_output(text: str, max_tokens: int) -> str:
     """Strip inline images then boundary-truncate to a token budget."""
-    text = _strip_images(text)
+    text = _rehydrate_tool_output(text)
     if estimate_tokens(text) <= max_tokens:
         return text
     limit = max_tokens * 4
@@ -76,6 +76,22 @@ def _prune_tool_output(text: str, max_tokens: int) -> str:
     if cut > limit // 2:
         head = head[:cut + 1]
     return head.rstrip() + " …[truncated]"
+
+
+def _rehydrate_tool_output(text: str) -> str:
+    text = _strip_images(text)
+    try:
+        from ..tools.tool_result_storage import rehydrate_persisted_tool_result
+
+        return rehydrate_persisted_tool_result(text)
+    except Exception:  # noqa: BLE001
+        return text
+
+
+def _content_for_summary(m: Message) -> str:
+    if m.role == "tool":
+        return _rehydrate_tool_output(m.content or "")
+    return _strip_images(m.content or "")
 
 
 def _prune_tool_call_args(calls: list[ToolCall],
@@ -328,7 +344,8 @@ def compress(messages: list[Message], provider, *, preserve_first: int = 3,
         return system_msgs + _strip_historical_media(head + [_summary_note(body)] + tail)
 
     transcript = "\n".join(
-        f"{m.role}: {m.content}" + (f" [tools: {[tc.name for tc in m.tool_calls]}]" if m.tool_calls else "")
+        f"{m.role}: {_content_for_summary(m)}"
+        + (f" [tools: {[tc.name for tc in m.tool_calls]}]" if m.tool_calls else "")
         for m in new_middle
     )
     instruction = _SUMMARY_INSTRUCTION + (

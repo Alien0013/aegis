@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import fnmatch
+import json
 import os
 import re
 import shutil
@@ -11,6 +13,7 @@ import stat
 import tempfile
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -22,6 +25,19 @@ DEFAULT_FILE_READ_MAX_CHARS = 100_000
 DEFAULT_FILE_READ_MAX_LINES = 2000
 DEFAULT_FILE_READ_MAX_LINE_LENGTH = 2000
 _UTF8_BOM = "\ufeff"
+_READ_DISPLAY_PREFIX_RE = re.compile(r"^\s*(\d+)(?:\||\t)")
+_TEXT_READ_BINARY_EXTENSIONS = frozenset({
+    ".7z", ".a", ".aac", ".aiff", ".app", ".avi", ".bin", ".blend", ".bmp", ".bz2",
+    ".class", ".dat", ".data", ".db", ".deb", ".dll", ".doc", ".docx", ".dylib",
+    ".ear", ".eot", ".exe", ".fig", ".fla", ".flac", ".flv", ".gif", ".gz", ".ico",
+    ".idx", ".iso", ".jar", ".jpeg", ".jpg", ".lockb", ".m4a", ".m4v", ".max",
+    ".mdb", ".mkv", ".mov", ".mp3", ".mp4", ".mpeg", ".mpg", ".msi", ".node",
+    ".o", ".obj", ".odp", ".ods", ".odt", ".ogg", ".opus", ".otf", ".ppt", ".pptx",
+    ".psd", ".pyc", ".pyo", ".rar", ".rlib", ".rpm", ".sketch", ".so", ".sqlite",
+    ".sqlite3", ".swf", ".tar", ".tgz", ".tif", ".tiff", ".ttf", ".war", ".wasm",
+    ".wav", ".webm", ".webp", ".wmv", ".woff", ".woff2", ".xls", ".xlsx", ".xz",
+    ".z", ".zip",
+})
 
 
 def _resolve(ctx: ToolContext, path: str) -> Path:
@@ -29,18 +45,25 @@ def _resolve(ctx: ToolContext, path: str) -> Path:
     return p if p.is_absolute() else (ctx.cwd / p)
 
 
-def _cfg_int(ctx: ToolContext, dotted: str, default: int) -> int:
+def _cfg_int(ctx: ToolContext, dotted: str, default: int, *, aliases: tuple[str, ...] = ()) -> int:
     cfg = getattr(ctx, "config", None)
+    keys = aliases + (dotted,)
     try:
-        value = cfg.get(dotted, default) if cfg is not None else default
-        value = int(value)
+        if cfg is None:
+            return default
+        for key in keys:
+            value = cfg.get(key, None)
+            if value is None:
+                continue
+            value = int(value)
+            return value if value > 0 else default
     except (TypeError, ValueError):
         return default
-    return value if value > 0 else default
+    return default
 
 
 def _max_output_chars(ctx: ToolContext) -> int:
-    return _cfg_int(ctx, "tools.max_output_chars", MAX_OUTPUT)
+    return _cfg_int(ctx, "tools.max_output_chars", MAX_OUTPUT, aliases=("tool_output.max_bytes",))
 
 
 def _file_read_max_chars(ctx: ToolContext) -> int:
@@ -48,11 +71,16 @@ def _file_read_max_chars(ctx: ToolContext) -> int:
 
 
 def _file_read_max_lines(ctx: ToolContext) -> int:
-    return _cfg_int(ctx, "tools.file_read_max_lines", DEFAULT_FILE_READ_MAX_LINES)
+    return _cfg_int(ctx, "tools.file_read_max_lines", DEFAULT_FILE_READ_MAX_LINES, aliases=("tool_output.max_lines",))
 
 
 def _file_read_max_line_length(ctx: ToolContext) -> int:
-    return _cfg_int(ctx, "tools.file_read_max_line_length", DEFAULT_FILE_READ_MAX_LINE_LENGTH)
+    return _cfg_int(
+        ctx,
+        "tools.file_read_max_line_length",
+        DEFAULT_FILE_READ_MAX_LINE_LENGTH,
+        aliases=("tool_output.max_line_length",),
+    )
 
 
 def _coerce_int(value, default: int) -> int:
@@ -128,12 +156,99 @@ def _line_for_read(line: str, max_len: int) -> str:
     return line[:max_len] + " ... [line truncated]"
 
 
+def _has_text_read_binary_extension(path: Path) -> bool:
+    return path.suffix.lower() in _TEXT_READ_BINARY_EXTENSIONS
+
+
+def _normalize_for_write_verify(text: str) -> str:
+    text, _had_bom = _strip_bom(text)
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _verify_local_write(path: Path, expected: str) -> str:
+    try:
+        actual = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"Post-write verification failed for {path}: could not re-read file ({exc})."
+    if _normalize_for_write_verify(actual) == _normalize_for_write_verify(expected):
+        return ""
+    return (
+        f"Post-write verification failed for {path}: on-disk content differs "
+        "from the intended write. The edit did not persist; re-read the file and try again."
+    )
+
+
+def _is_read_file_display_text(content: str) -> bool:
+    """Detect content dominated by read_file line-number gutters."""
+    if not isinstance(content, str):
+        return False
+    lines = [line for line in content.splitlines() if line.strip()]
+    if len(lines) < 2:
+        return False
+    numbered: list[int] = []
+    for line in lines:
+        match = _READ_DISPLAY_PREFIX_RE.match(line)
+        if match:
+            numbered.append(int(match.group(1)))
+    if len(numbered) < 2 or len(numbered) / len(lines) < 0.6:
+        return False
+    consecutive = sum(
+        1 for previous, current in zip(numbered, numbered[1:])
+        if current == previous + 1
+    )
+    return consecutive >= len(numbered) - 1
+
+
+def _is_internal_file_tool_content(content: str) -> bool:
+    return _is_read_file_display_text(content)
+
+
+def _task_id(ctx: ToolContext) -> str:
+    return str(getattr(ctx, "task_id", "") or "")
+
+
+def _active_backend_env(ctx: ToolContext):
+    cfg = getattr(ctx, "config", None)
+    if cfg is None:
+        return None
+    task_id = _task_id(ctx) or "default"
+    try:
+        from .backends import effective_backend, get_active_environment
+
+        backend = effective_backend(str(cfg.get("tools.terminal_backend", "local") or "local"), task_id)
+        if backend == "local":
+            return None
+        return get_active_environment(task_id, backend)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _read_text_from_active_backend(path: Path, ctx: ToolContext) -> str | None:
+    env = _active_backend_env(ctx)
+    if env is None:
+        return None
+    try:
+        from .tool_result_storage import load_persisted_tool_result_path
+
+        content, _metadata = load_persisted_tool_result_path(str(path), env=env)
+        return content
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # --------------------------------------------------------------------------- #
 # Filesystem
 # --------------------------------------------------------------------------- #
 class ReadFileTool(Tool):
     name = "read_file"
     description = "Read a text file. Returns content with 1-based line numbers. Use offset/limit for large files."
+    extra_toolsets = ["file"]
+    max_result_size_chars = DEFAULT_FILE_READ_MAX_CHARS
+    output_limits = {
+        "max_chars": "config:tools.file_read_max_chars",
+        "max_result_size_chars": DEFAULT_FILE_READ_MAX_CHARS,
+        "policy": "paginate",
+    }
     parameters = {
         "type": "object",
         "properties": {
@@ -147,26 +262,37 @@ class ReadFileTool(Tool):
     def run(self, args, ctx) -> ToolResult:
         path = _resolve(ctx, args["path"])
         fs = getattr(ctx, "fs", None)
+        remote_text: str | None = None
         if fs is None:                       # real filesystem (default)
             if not path.exists():
-                return ToolResult.error(f"No such file: {path}")
+                remote_text = _read_text_from_active_backend(path, ctx)
+                if remote_text is None:
+                    return ToolResult.error(f"No such file: {path}")
             if path.is_dir():
                 return ToolResult.error(f"{path} is a directory (use list_dir).")
-            from . import file_safety
-            denied = file_safety.authorize_read(path, ctx)
-            if denied:
-                return ToolResult.error(denied)
-            try:
-                with open(path, "rb") as sample:
-                    sample_bytes = sample.read(1000)
-                if b"\0" in sample_bytes:
+            if remote_text is None:
+                from . import file_safety
+                denied = file_safety.authorize_read(path, ctx)
+                if denied:
+                    return ToolResult.error(denied)
+                if _has_text_read_binary_extension(path):
                     return ToolResult.error(
-                        f"Cannot read {path}: binary file - use an appropriate tool instead."
+                        f"Cannot read {path}: binary file extension - use an appropriate tool instead."
                     )
-            except OSError:
-                pass
+                try:
+                    with open(path, "rb") as sample:
+                        sample_bytes = sample.read(1000)
+                    if b"\0" in sample_bytes:
+                        return ToolResult.error(
+                            f"Cannot read {path}: binary file - use an appropriate tool instead."
+                        )
+                except OSError:
+                    pass
         try:
-            text = fs.read_text(str(path)) if fs else path.read_text(encoding="utf-8", errors="replace")
+            if remote_text is not None:
+                text = remote_text
+            else:
+                text = fs.read_text(str(path)) if fs else path.read_text(encoding="utf-8", errors="replace")
             text, _had_bom = _strip_bom(text)
             lines = text.splitlines()
         except Exception as e:  # noqa: BLE001
@@ -176,7 +302,7 @@ class ReadFileTool(Tool):
         limit = max(1, min(limit, _file_read_max_lines(ctx)))
         max_line = _file_read_max_line_length(ctx)
         chunk = lines[offset - 1: offset - 1 + limit]
-        body = "\n".join(f"{offset + i:6d}\t{_line_for_read(ln, max_line)}" for i, ln in enumerate(chunk))
+        body = "\n".join(f"{offset + i}|{_line_for_read(ln, max_line)}" for i, ln in enumerate(chunk))
         if len(body) > _file_read_max_chars(ctx):
             return ToolResult.error(
                 f"read_file result exceeds safety limit ({_file_read_max_chars(ctx)} chars). "
@@ -184,7 +310,9 @@ class ReadFileTool(Tool):
             )
         if fs is None:
             from . import file_state
-            file_state.note(path)            # freshness stamp for later stale-write checks
+            partial = offset > 1 or limit < len(lines)
+            # Freshness stamp for later stale-write checks.
+            file_state.record_read(_task_id(ctx), path, partial=partial)
         return ToolResult.ok(
             truncate(body, _max_output_chars(ctx)),
             display=f"read {path.name} ({len(chunk)} lines)",
@@ -195,6 +323,7 @@ class WriteFileTool(Tool):
     name = "write_file"
     description = "Create or overwrite a file with the given content. Creates parent directories."
     groups = ["fs"]
+    extra_toolsets = ["file"]
     parameters = {
         "type": "object",
         "properties": {
@@ -206,6 +335,12 @@ class WriteFileTool(Tool):
 
     def run(self, args, ctx) -> ToolResult:
         path = _resolve(ctx, args["path"])
+        content = str(args["content"])
+        if _is_internal_file_tool_content(content):
+            return ToolResult.error(
+                "Refusing to write internal read_file display text as file content. "
+                "Strip line-number prefixes or reconstruct the intended file contents before writing."
+            )
         fs = getattr(ctx, "fs", None)
         stale = ""
         lock = nullcontext()
@@ -218,22 +353,25 @@ class WriteFileTool(Tool):
         try:
             with lock:
                 if fs:                       # delegate to the editor (ACP fs/write_text_file)
-                    fs.write_text(str(path), args["content"])
+                    fs.write_text(str(path), content)
                 else:
                     from . import file_state
-                    stale = file_state.stale_warning(path)
+                    stale = file_state.stale_warning(path, task_id=_task_id(ctx))
                     _lsp_snapshot(ctx, path)
                     had_bom = False
                     ending = None
                     if path.exists():
                         old_text, had_bom, ending = _read_text_for_edit(path)
                         del old_text
-                    content = _normalize_line_endings(str(args["content"]), ending)
-                    _atomic_write_local(path, _restore_bom(content, had_bom))
-                    file_state.note(path)
+                    normalized_content = _normalize_line_endings(content, ending)
+                    _atomic_write_local(path, _restore_bom(normalized_content, had_bom))
+                    verification_error = _verify_local_write(path, normalized_content)
+                    if verification_error:
+                        return ToolResult.error(verification_error)
+                    file_state.note_write(_task_id(ctx), path)
         except Exception as e:  # noqa: BLE001
             return ToolResult.error(f"Could not write {path}: {e}")
-        n = args["content"].count("\n") + 1
+        n = content.count("\n") + 1
         msg = f"Wrote {n} lines to {path}" + ("" if fs else _lsp_delta(ctx, path)) + stale
         return ToolResult.ok(msg, display=f"wrote {path.name}")
 
@@ -262,7 +400,7 @@ class EditFileTool(Tool):
         if denied:
             return ToolResult.error(denied)
         with file_state.lock_path(path):
-            stale = file_state.stale_warning(path)
+            stale = file_state.stale_warning(path, task_id=_task_id(ctx))
             text, had_bom, ending = _read_text_for_edit(path)
             old, new = args["old_string"], args["new_string"]
             via = ""
@@ -291,7 +429,10 @@ class EditFileTool(Tool):
             _lsp_snapshot(ctx, path)
             text = text.replace(old, new) if args.get("replace_all") else text.replace(old, new, 1)
             _atomic_write_local(path, _restore_bom(text, had_bom))
-            file_state.note(path)
+            verification_error = _verify_local_write(path, text)
+            if verification_error:
+                return ToolResult.error(verification_error)
+            file_state.note_write(_task_id(ctx), path)
         return ToolResult.ok(f"Edited {path} ({count if args.get('replace_all') else 1} replacement(s))."
                              + via + _lsp_delta(ctx, path) + stale,
                              display=f"edited {path.name}")
@@ -392,15 +533,104 @@ class GlobTool(Tool):
         return ToolResult.ok("\n".join(matches) or "(no matches)", display=f"glob {len(matches)} files")
 
 
+def _search_pagination(args: dict) -> tuple[int, int]:
+    offset = max(0, _coerce_int(args.get("offset", 0), 0))
+    limit = max(1, min(_coerce_int(args.get("limit", 50), 50), 500))
+    return offset, limit
+
+
+def _search_json_result(data: dict, ctx: ToolContext, *, display: str) -> ToolResult:
+    body = json.dumps(data, ensure_ascii=False)
+    return ToolResult.ok(truncate(body, _max_output_chars(ctx)), display=display, data=data)
+
+
+def _file_search_pattern(pattern: str) -> str:
+    if "/" not in pattern and not any(ch in pattern for ch in "*?[]"):
+        return f"*{pattern}*"
+    return pattern
+
+
+def _slice_with_truncation(items: list, offset: int, limit: int) -> tuple[list, bool]:
+    page = items[offset:offset + limit]
+    return page, len(items) > offset + limit
+
+
+def _add_next_offset(data: dict[str, object], offset: int, limit: int) -> dict[str, object]:
+    if data.get("truncated"):
+        data["next_offset"] = offset + limit
+    return data
+
+
+def _parse_rg_match_line(line: str) -> dict[str, object] | None:
+    match = re.match(r"^([A-Za-z]:)?(.*?):(\d+):(.*)$", line)
+    if not match:
+        return None
+    return {
+        "path": (match.group(1) or "") + match.group(2),
+        "line": int(match.group(3)),
+        "content": match.group(4)[:500],
+    }
+
+
+def _parse_rg_context_line(line: str) -> dict[str, object] | None:
+    if not line or line == "--":
+        return None
+    match = None
+    for candidate in re.finditer(r"-(\d+)-", line):
+        match = candidate
+    if match is None:
+        return None
+    path = line[:match.start()]
+    if not path:
+        return None
+    return {"path": path, "line": int(match.group(1)), "content": line[match.end():][:500]}
+
+
+def _densify_matches(matches: list[dict[str, object]]) -> dict[str, object]:
+    if len(matches) < 5:
+        return {"matches": matches}
+    lines: list[str] = []
+    current_path = None
+    for item in matches:
+        path = str(item.get("path", ""))
+        if path != current_path:
+            lines.append(path)
+            current_path = path
+        lines.append(f"  {item.get('line')}: {str(item.get('content', '')).rstrip()}")
+    return {
+        "matches_format": (
+            "path-grouped: each file path on its own line, followed by "
+            "indented '<line>: <content>' rows for matches in that file"
+        ),
+        "matches_text": "\n".join(lines),
+    }
+
+
 class SearchTool(Tool):
     name = "search"
-    description = "Search file contents for a regex (uses ripgrep if available). Returns matching lines."
+    description = "Search file contents or find files by name. Supports reference-style search_files pagination and output modes."
+    extra_toolsets = ["file"]
+    max_result_size_chars = 100_000
     parameters = {
         "type": "object",
         "properties": {
             "pattern": {"type": "string"},
             "path": {"type": "string", "description": "Dir/file to search (default cwd)."},
+            "target": {
+                "type": "string",
+                "enum": ["content", "files", "grep", "find"],
+                "description": "'content'/'grep' searches file text; 'files'/'find' searches file names.",
+            },
             "glob": {"type": "string", "description": "Optional file glob filter, e.g. '*.py'."},
+            "file_glob": {"type": "string", "description": "Optional file glob filter, e.g. '*.py'."},
+            "limit": {"type": "integer", "description": "Maximum results to return (default 50)."},
+            "offset": {"type": "integer", "description": "Skip this many results for pagination."},
+            "output_mode": {
+                "type": "string",
+                "enum": ["content", "files_only", "count"],
+                "description": "Content search output shape.",
+            },
+            "context": {"type": "integer", "description": "Context lines around content matches."},
         },
         "required": ["pattern"],
     }
@@ -408,38 +638,142 @@ class SearchTool(Tool):
     def run(self, args, ctx) -> ToolResult:
         base = _resolve(ctx, args.get("path", "."))
         pattern = args["pattern"]
+        target_map = {"grep": "content", "find": "files"}
+        target = target_map.get(str(args.get("target", "content") or "content"), args.get("target", "content"))
+        offset, limit = _search_pagination(args)
+        file_glob = args.get("file_glob") or args.get("glob")
+        output_mode = str(args.get("output_mode", "content") or "content")
+        context = max(0, min(_coerce_int(args.get("context", 0), 0), 20))
+        if not base.exists():
+            return ToolResult.error(f"Path not found: {base}")
+        if target == "files":
+            return self._search_files(base, pattern, offset, limit, ctx)
+        return self._search_content(base, pattern, file_glob, output_mode, context, offset, limit, ctx)
+
+    def _search_files(self, base: Path, pattern: str, offset: int, limit: int, ctx: ToolContext) -> ToolResult:
         rg = shutil.which("rg")
         if rg:
-            cmd = [rg, "-n", "--no-heading", "--color=never", pattern, str(base)]
-            if args.get("glob"):
-                cmd[1:1] = ["-g", args["glob"]]
+            glob_pattern = _file_search_pattern(pattern)
+            fetch_limit = offset + limit + 1
+            cmd = [rg, "--files", "--sortr=modified", "-g", glob_pattern, str(base)]
             try:
-                out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                body = out.stdout or out.stderr or "(no matches)"
-                return ToolResult.ok(truncate(body, _max_output_chars(ctx)), display="ripgrep search")
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if out.returncode not in (0, 1):
+                    cmd = [rg, "--files", "-g", glob_pattern, str(base)]
+                    out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                files = [line for line in out.stdout.splitlines() if line][:fetch_limit]
             except subprocess.TimeoutExpired:
                 return ToolResult.error("search timed out")
-        # python fallback
+            page, truncated = _slice_with_truncation(files, offset, limit)
+            data = _add_next_offset({"total_count": len(files), "files": page, "truncated": truncated}, offset, limit)
+            return _search_json_result(data, ctx, display=f"search files ({len(page)} files)")
+
+        glob_pattern = _file_search_pattern(pattern)
+        matches = [
+            str(path)
+            for path in base.rglob(glob_pattern)
+            if path.is_file() and not any(part.startswith(".") for part in path.relative_to(base).parts)
+        ][:offset + limit + 1]
+        matches.sort(key=lambda item: Path(item).stat().st_mtime if Path(item).exists() else 0, reverse=True)
+        page, truncated = _slice_with_truncation(matches, offset, limit)
+        data = _add_next_offset({"total_count": len(matches), "files": page, "truncated": truncated}, offset, limit)
+        return _search_json_result(data, ctx, display=f"search files ({len(page)} files)")
+
+    def _search_content(
+        self,
+        base: Path,
+        pattern: str,
+        file_glob: str | None,
+        output_mode: str,
+        context: int,
+        offset: int,
+        limit: int,
+        ctx: ToolContext,
+    ) -> ToolResult:
+        rg = shutil.which("rg")
+        if rg:
+            cmd = [rg, "--line-number", "--no-heading", "--with-filename", "--color=never"]
+            if context:
+                cmd.extend(["-C", str(context)])
+            if file_glob:
+                cmd.extend(["-g", str(file_glob)])
+            if output_mode == "files_only":
+                cmd.append("-l")
+            elif output_mode == "count":
+                cmd.append("-c")
+            cmd.extend([pattern, str(base)])
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                return ToolResult.error("search timed out")
+            if out.returncode == 2 and not out.stdout.strip():
+                return ToolResult.error(f"Search failed: {(out.stderr or out.stdout or 'search error').strip()}")
+            lines = [line for line in out.stdout.splitlines() if line and not line.startswith("rg: ")]
+            if output_mode == "files_only":
+                files, truncated = _slice_with_truncation(lines, offset, limit)
+                data = _add_next_offset({"total_count": len(lines), "files": files, "truncated": truncated}, offset, limit)
+                return _search_json_result(data, ctx, display=f"search files_only ({len(files)} files)")
+            if output_mode == "count":
+                counts: dict[str, int] = {}
+                for line in lines:
+                    path, sep, raw_count = line.rpartition(":")
+                    if sep:
+                        try:
+                            counts[path] = int(raw_count)
+                        except ValueError:
+                            continue
+                data = {"total_count": sum(counts.values()), "counts": counts}
+                return _search_json_result(data, ctx, display=f"search count ({len(counts)} files)")
+            matches = []
+            for line in lines:
+                parsed = _parse_rg_match_line(line)
+                if parsed is None and context:
+                    parsed = _parse_rg_context_line(line)
+                if parsed is not None:
+                    matches.append(parsed)
+            page, truncated = _slice_with_truncation(matches, offset, limit)
+            data: dict[str, object] = _add_next_offset({"total_count": len(matches), "truncated": truncated}, offset, limit)
+            data.update(_densify_matches(page))
+            return _search_json_result(data, ctx, display=f"search ({len(page)} hits)")
+
         try:
             rx = re.compile(pattern)
         except re.error as e:
             return ToolResult.error(f"bad regex: {e}")
-        hits: list[str] = []
-        files = [base] if base.is_file() else base.rglob(args.get("glob", "*"))
-        for f in files:
-            if not f.is_file():
+        files = [base] if base.is_file() else base.rglob(file_glob or "*")
+        matches: list[dict[str, object]] = []
+        file_hits: list[str] = []
+        counts: dict[str, int] = {}
+        for path in files:
+            if not path.is_file():
+                continue
+            if file_glob and not fnmatch.fnmatch(path.name, file_glob) and not fnmatch.fnmatch(str(path), file_glob):
                 continue
             try:
-                for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                file_count = 0
+                for i, line in enumerate(path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
                     if rx.search(line):
-                        hits.append(f"{f}:{i}:{line}")
-                        if len(hits) >= 500:
-                            break
+                        file_count += 1
+                        if output_mode == "content":
+                            matches.append({"path": str(path), "line": i, "content": line[:500]})
+                if file_count:
+                    file_hits.append(str(path))
+                    counts[str(path)] = file_count
             except Exception:  # noqa: BLE001
                 continue
-            if len(hits) >= 500:
+            if len(matches) >= offset + limit + 1:
                 break
-        return ToolResult.ok("\n".join(hits) or "(no matches)", display=f"search ({len(hits)} hits)")
+        if output_mode == "files_only":
+            page, truncated = _slice_with_truncation(file_hits, offset, limit)
+            data = _add_next_offset({"total_count": len(file_hits), "files": page, "truncated": truncated}, offset, limit)
+            return _search_json_result(data, ctx, display=f"search files_only ({len(page)} files)")
+        if output_mode == "count":
+            data = {"total_count": sum(counts.values()), "counts": counts}
+            return _search_json_result(data, ctx, display=f"search count ({len(counts)} files)")
+        page, truncated = _slice_with_truncation(matches, offset, limit)
+        data = _add_next_offset({"total_count": len(matches), "truncated": truncated}, offset, limit)
+        data.update(_densify_matches(page))
+        return _search_json_result(data, ctx, display=f"search ({len(page)} hits)")
 
 
 # --------------------------------------------------------------------------- #
@@ -449,6 +783,8 @@ class BashTool(Tool):
     name = "bash"
     description = "Run a shell command in the working directory and return stdout/stderr."
     groups = ["runtime"]
+    extra_toolsets = ["terminal"]
+    max_result_size_chars = 100_000
     parameters = {
         "type": "object",
         "properties": {
@@ -809,6 +1145,7 @@ class WebFetchTool(Tool):
     name = "web_fetch"
     description = "Fetch a URL and return its readable text content."
     groups = ["network"]
+    max_result_size_chars = 100_000
     parameters = {
         "type": "object",
         "properties": {"url": {"type": "string"}},
@@ -840,6 +1177,7 @@ class WebSearchTool(Tool):
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets. Backend configurable (web.search_backend)."
     groups = ["network"]
+    extra_toolsets = ["web", "search"]
     parameters = {
         "type": "object",
         "properties": {"query": {"type": "string"}},
@@ -922,35 +1260,160 @@ class WebSearchTool(Tool):
 # --------------------------------------------------------------------------- #
 # Task management
 # --------------------------------------------------------------------------- #
+_TODO_STATUSES = ("pending", "in_progress", "completed", "cancelled")
+_MAX_TODO_CONTENT_CHARS = 4000
+_MAX_TODO_ITEMS = 256
+_TODO_TRUNCATION_MARKER = "... [truncated]"
+
+
+def _todo_cap_content(content: str) -> str:
+    if len(content) <= _MAX_TODO_CONTENT_CHARS:
+        return content
+    keep = max(0, _MAX_TODO_CONTENT_CHARS - len(_TODO_TRUNCATION_MARKER))
+    return content[:keep] + _TODO_TRUNCATION_MARKER
+
+
+def _normalize_todo_item(item: Any, index: int = 0) -> dict[str, str]:
+    if not isinstance(item, dict):
+        return {"id": str(index + 1), "content": "(invalid item)", "status": "pending"}
+    raw_id = str(item.get("id", "")).strip()
+    item_id = raw_id or str(index + 1)
+    content = str(item.get("content", "")).strip() or "(no description)"
+    status = str(item.get("status", "pending")).strip().lower()
+    if status not in _TODO_STATUSES:
+        status = "pending"
+    return {"id": item_id, "content": _todo_cap_content(content), "status": status}
+
+
+def _dedupe_todos_by_id(todos: list[Any]) -> list[Any]:
+    last_index: dict[str, int] = {}
+    for index, item in enumerate(todos):
+        if isinstance(item, dict):
+            item_id = str(item.get("id", "")).strip() or str(index + 1)
+        else:
+            item_id = f"__invalid_{index}"
+        last_index[item_id] = index
+    return [todos[index] for index in sorted(last_index.values())]
+
+
+def _normalize_todos(raw: Any) -> list[dict[str, str]]:
+    if not isinstance(raw, list):
+        return []
+    items = [_normalize_todo_item(item, index) for index, item in enumerate(_dedupe_todos_by_id(raw))]
+    return items[:_MAX_TODO_ITEMS]
+
+
+def _merge_todos(current: list[dict[str, str]], updates: list[Any]) -> list[dict[str, str]]:
+    existing = {item["id"]: item.copy() for item in _normalize_todos(current)}
+    order = [item["id"] for item in _normalize_todos(current)]
+    for index, raw in enumerate(_dedupe_todos_by_id(updates)):
+        if not isinstance(raw, dict):
+            continue
+        item_id = str(raw.get("id", "")).strip()
+        if not item_id:
+            item_id = str(len(order) + 1)
+            raw = {**raw, "id": item_id}
+        if item_id in existing:
+            if "content" in raw and str(raw.get("content", "")).strip():
+                existing[item_id]["content"] = _todo_cap_content(str(raw["content"]).strip())
+            if "status" in raw and str(raw.get("status", "")).strip().lower() in _TODO_STATUSES:
+                existing[item_id]["status"] = str(raw["status"]).strip().lower()
+        else:
+            item = _normalize_todo_item(raw, len(order) + index)
+            existing[item["id"]] = item
+            order.append(item["id"])
+    return [existing[item_id] for item_id in order if item_id in existing][:_MAX_TODO_ITEMS]
+
+
+def todo_summary(todos: list[dict[str, str]]) -> dict[str, int]:
+    return {
+        "total": len(todos),
+        "pending": sum(1 for item in todos if item.get("status") == "pending"),
+        "in_progress": sum(1 for item in todos if item.get("status") == "in_progress"),
+        "completed": sum(1 for item in todos if item.get("status") == "completed"),
+        "cancelled": sum(1 for item in todos if item.get("status") == "cancelled"),
+    }
+
+
+def active_todo_injection(todos: list[dict[str, str]] | None) -> str:
+    active = [
+        item for item in _normalize_todos(todos or [])
+        if item["status"] in {"pending", "in_progress"}
+    ]
+    if not active:
+        return ""
+    markers = {
+        "pending": "[ ]",
+        "in_progress": "[>]",
+    }
+    lines = ["# Active Todo List", "Preserved across context compression/session rebuild:"]
+    for item in active:
+        lines.append(f"- {markers.get(item['status'], '[ ]')} {item['id']}. {item['content']} ({item['status']})")
+    return "\n".join(lines)
+
+
 class TodoWriteTool(Tool):
     name = "todo_write"
-    description = "Record/replace the working task list. Pass the full list each call."
+    description = (
+        "Manage the working task list for this session. Call with no parameters to read. "
+        "Pass todos to replace the list, or merge=true to update existing items by id. "
+        "Use for complex tasks with 3+ steps; list order is priority and only one item "
+        "should be in_progress at a time."
+    )
+    extra_toolsets = ["todo"]
     parameters = {
         "type": "object",
         "properties": {
             "todos": {
                 "type": "array",
+                "description": "Task items to write. Omit to read the current list.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string"},
-                        "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]},
+                        "id": {"type": "string", "description": "Unique item identifier."},
+                        "content": {"type": "string", "description": "Task description."},
+                        "status": {"type": "string", "enum": list(_TODO_STATUSES)},
                     },
                     "required": ["content", "status"],
                 },
-            }
+            },
+            "merge": {
+                "type": "boolean",
+                "description": "true updates by id and appends new items; false replaces the list.",
+                "default": False,
+            },
         },
-        "required": ["todos"],
+        "required": [],
     }
 
     def run(self, args, ctx) -> ToolResult:
-        todos = args["todos"]
-        if ctx.session is not None:
-            ctx.session.todos = todos
-        marks = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
-        rendered = "\n".join(f"{marks.get(t['status'], '[ ]')} {t['content']}" for t in todos)
-        done = sum(1 for t in todos if t["status"] == "completed")
-        return ToolResult.ok(rendered or "(empty)", display=f"todos {done}/{len(todos)} done")
+        session = getattr(ctx, "session", None)
+        current = _normalize_todos(getattr(session, "todos", []) if session is not None else [])
+        raw_todos = args.get("todos")
+        if isinstance(raw_todos, str):
+            try:
+                raw_todos = json.loads(raw_todos)
+            except (json.JSONDecodeError, TypeError):
+                return ToolResult.error("todos must be a list of objects, got unparseable string")
+        if raw_todos is not None and not isinstance(raw_todos, list):
+            return ToolResult.error(f"todos must be a list, got {type(raw_todos).__name__}")
+
+        if raw_todos is None:
+            todos = current
+        elif bool(args.get("merge", False)):
+            todos = _merge_todos(current, raw_todos)
+        else:
+            todos = _normalize_todos(raw_todos)
+
+        if session is not None:
+            session.todos = todos
+        summary = todo_summary(todos)
+        payload = {"todos": todos, "summary": summary}
+        return ToolResult.ok(
+            json.dumps(payload, ensure_ascii=False),
+            display=f"todos {summary['completed']}/{summary['total']} done",
+            data=payload,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -958,6 +1421,7 @@ class TodoWriteTool(Tool):
 # --------------------------------------------------------------------------- #
 class MemoryTool(Tool):
     name = "memory"
+    extra_toolsets = ["memory"]
     description = (
         "Save durable information to persistent memory that survives across sessions. "
         "Memory is injected into future sessions, so keep it compact and focused on facts "
@@ -981,27 +1445,52 @@ class MemoryTool(Tool):
         "into only the user profile.\n\n"
         "ACTIONS: add (new entry), replace (update existing — old_text identifies it), "
         "remove (delete — old_text identifies it).\n\n"
+        "For multiple changes, use one atomic operations array instead of several calls. "
+        "Each operation is {action, content?, old_text?}; the batch checks the final memory "
+        "size only, so it can remove/replace stale entries and add the new fact in one durable "
+        "write. A successful batch is complete; do not repeat it.\n\n"
         "SKIP: trivial/obvious info, things easily re-discovered, raw data dumps, temporary task state."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["add", "replace", "remove"]},
+            "action": {
+                "type": "string",
+                "enum": ["add", "replace", "remove"],
+                "description": "Single-operation action. Omit when using operations.",
+            },
             "target": {"type": "string", "enum": ["memory", "user"],
                        "description": "'memory' for personal notes, 'user' for the user profile."},
             "content": {"type": "string",
-                        "description": "The entry content. Required for add and replace."},
+                        "description": "The entry content. Required for add and replace in single-operation calls."},
             "old_text": {"type": "string",
                          "description": "Short unique substring identifying the entry to "
-                                        "replace or remove."},
+                                        "replace or remove in single-operation calls."},
+            "operations": {
+                "type": "array",
+                "description": (
+                    "Preferred batch shape for multiple changes or consolidation: operations "
+                    "are applied atomically against the final char budget."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["add", "replace", "remove"]},
+                        "content": {"type": "string", "description": "Entry content for add/replace."},
+                        "old_text": {"type": "string", "description": "Entry substring for replace/remove."},
+                    },
+                    "required": ["action"],
+                },
+            },
         },
-        "required": ["action", "target"],
+        "required": ["target"],
     }
 
     def run(self, args, ctx) -> ToolResult:
         if ctx.memory is None:
             return ToolResult.error("memory is not enabled.")
-        return ctx.memory.handle_tool(args)
+        origin = "background_review" if bool(getattr(getattr(ctx, "agent", None), "background_review", False)) else "foreground"
+        return ctx.memory.handle_tool(args, approver=getattr(ctx, "approver", None), origin=origin)
 
 
 # --------------------------------------------------------------------------- #
@@ -1009,6 +1498,7 @@ class MemoryTool(Tool):
 # --------------------------------------------------------------------------- #
 class SkillTool(Tool):
     name = "skill"
+    extra_toolsets = ["skills"]
     description = (
         "Work with skills (your procedural memory). action: list | view (load full body) | "
         "create (SAVE a reusable skill after solving a non-trivial, repeatable task) | "

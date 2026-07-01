@@ -23,6 +23,11 @@ class EventType:
     ERROR = "error"                    # {message}
     PROVIDER_START = "provider_start"  # {provider, model, stream, reasoning, service_tier}
     PROVIDER_END = "provider_end"      # {provider, model, duration_ms, status}
+    PROVIDER_READINESS = "provider_readiness"  # {status, provider, model, missing}
+    RUNTIME_ROUTE = "runtime_route"     # {source, provider, model, base_provider, base_model}
+    MODEL_DOWNSHIFT = "model_downshift"  # {provider, model, base_provider, base_model}
+    BUDGET_WARNING = "budget_warning"   # {message, over, blocked}
+    TURN_BLOCKED = "turn_blocked"       # {reason, message}
 
     # --- tools ---
     TOOL_START = "tool_start"          # {id, name, args}

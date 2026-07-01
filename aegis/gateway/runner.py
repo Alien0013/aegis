@@ -30,6 +30,58 @@ _SLACK_ATTACHMENT_HOST_SUFFIXES = (
 )
 _MAX_TRANSCRIBED_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
+_GATEWAY_COMMAND_REGISTRY = (
+    {
+        "name": "new",
+        "args": "[title]",
+        "description": "Start a fresh gateway session",
+        "aliases": ("reset",),
+    },
+    {"name": "stop", "description": "Interrupt the active gateway turn"},
+    {"name": "status", "description": "Show session, model, token, and context info"},
+    {"name": "whoami", "description": "Show your gateway identity and runtime controls"},
+    {"name": "commands", "args": "[page]", "description": "Browse gateway commands"},
+    {"name": "help", "description": "Show the current gateway status and command hints"},
+    {
+        "name": "model",
+        "args": "[provider/model]",
+        "description": "Switch the model for this gateway session",
+    },
+    {
+        "name": "provider",
+        "args": "[name]",
+        "description": "Switch the provider for this gateway session",
+    },
+    {
+        "name": "reasoning",
+        "args": "[mode]",
+        "description": "Show or change reasoning display and effort",
+    },
+    {"name": "fast", "args": "[on|off|status]", "description": "Toggle fast mode"},
+    {
+        "name": "busy",
+        "args": "[queue|steer|interrupt]",
+        "description": "Control what happens when a message arrives mid-turn",
+    },
+    {"name": "compress", "description": "Manually compact this session context"},
+    {
+        "name": "memory",
+        "args": "[pending|approve|reject|approval] [id|on|off]",
+        "description": "Review pending memory writes or toggle memory write approval",
+    },
+    {
+        "name": "skills",
+        "args": "[pending|approve|reject|diff|approval] [id|on|off]",
+        "description": "Review pending skill writes or toggle skill write approval",
+    },
+    {
+        "name": "goal",
+        "args": "[text|status|pause|resume|clear]",
+        "description": "Set or inspect the active session goal",
+    },
+    {"name": "subgoal", "args": "[text|remove|clear]", "description": "Manage subgoals"},
+)
+
 
 def _gateway_proxy_chat_url(url: str) -> str:
     base = str(url or "").strip().rstrip("/")
@@ -841,6 +893,23 @@ class GatewayRunner:
 
         return approve
 
+    def _gateway_approval_notifier(self, ev: MessageEvent, session_key: str):
+        adapter = self._adapter_for_platform(ev.platform)
+        if adapter is None:
+            return None
+        notify_pending = getattr(adapter, "notify_pending_approval", None)
+        if not callable(notify_pending):
+            return None
+
+        def notify(approval_data: dict) -> None:
+            payload = dict(approval_data or {})
+            payload["session_key"] = str(payload.get("session_key") or session_key)
+            if payload.get("prompt"):
+                payload["prompt"] = _redact_approval_prompt(str(payload.get("prompt") or ""), self.config)
+            notify_pending(ev, payload)
+
+        return notify
+
     @staticmethod
     def _parse_model_override(arg: str) -> tuple[str, str]:
         raw = arg.strip()
@@ -848,6 +917,57 @@ class GatewayRunner:
             provider, model = raw.split("/", 1)
             return provider.strip(), model.strip()
         return "", raw
+
+    def _gateway_command_lines(self) -> list[str]:
+        lines: list[str] = []
+        for command in _GATEWAY_COMMAND_REGISTRY:
+            name = str(command["name"])
+            args = str(command.get("args") or "")
+            args_part = f" {args}" if args else ""
+            aliases = tuple(str(alias) for alias in command.get("aliases", ()))
+            alias_note = ""
+            if aliases:
+                alias_note = " (alias: " + ", ".join(f"`/{alias}`" for alias in aliases) + ")"
+            lines.append(f"`/{name}{args_part}` -- {command['description']}{alias_note}")
+        return lines
+
+    def _gateway_commands(self, ev: MessageEvent, arg: str) -> str:
+        raw = arg.strip()
+        if raw:
+            try:
+                requested_page = int(raw)
+            except ValueError:
+                return "usage: /commands [page]"
+        else:
+            requested_page = 1
+
+        entries = self._gateway_command_lines()
+        if not entries:
+            return "No gateway commands are available."
+
+        platform = normalize_platform_name(ev.platform, default=str(ev.platform or "").lower())
+        page_size = 15 if platform == "telegram" else 20
+        total_pages = max(1, (len(entries) + page_size - 1) // page_size)
+        page = max(1, min(requested_page, total_pages))
+        start = (page - 1) * page_size
+        page_entries = entries[start:start + page_size]
+
+        lines = [
+            f"AEGIS gateway commands ({len(entries)} total, page {page}/{total_pages})",
+            "",
+            *page_entries,
+        ]
+        if total_pages > 1:
+            nav = []
+            if page > 1:
+                nav.append(f"/commands {page - 1}")
+            if page < total_pages:
+                nav.append(f"/commands {page + 1}")
+            if nav:
+                lines.extend(["", " | ".join(nav)])
+        if page != requested_page:
+            lines.append(f"requested page {requested_page}; showing page {page}.")
+        return "\n".join(lines)
 
     def _gateway_identity(self, ev: MessageEvent, key: str, session: Session) -> str:
         from ..surface import session_runtime_controls
@@ -909,7 +1029,7 @@ class GatewayRunner:
         return (
             f"AEGIS gateway · provider={provider} · model={model} · fast={service_tier} · session={key}\n"
             f"{context} · messages={messages}\n"
-            "Commands: /new · /status · /whoami · /model [provider/model] · "
+            "Commands: /new · /status · /whoami · /commands [page] · /model [provider/model] · "
             "/provider [name] · /reasoning [mode] · /fast [on|off] · /compress · /busy [mode] · "
             "/goal <text> · /subgoal <text> · /steer <text> · stop"
         )
@@ -978,6 +1098,8 @@ class GatewayRunner:
         command_started_turn = False
         is_internal = bool(getattr(ev, "internal", False))
         key = self._key(ev)
+        if not getattr(ev, "session_key", None):
+            ev.session_key = key
         # Authorization: unknown users must pair first.
         if not is_internal:
             from .pairing import PairingStore
@@ -994,6 +1116,66 @@ class GatewayRunner:
             return ("⛔ That command is restricted to admins. Available to you: "
                     + ", ".join(self._user_commands()))
         # Intercept control commands before the agent.
+        if text == "/memory" or text.startswith("/memory "):
+            args = text[len("/memory"):].strip().split()
+
+            def action(proxy):
+                from .. import write_approval as wa
+                from ..memory import MemoryManager
+                from ..write_approval_review import handle_pending_subcommand
+
+                def _set_approval(enabled: bool) -> None:
+                    self.config.set("memory.write_approval", bool(enabled))
+                    self._drop_agent(key)
+
+                out = handle_pending_subcommand(
+                    wa.MEMORY,
+                    args,
+                    config=self.config,
+                    memory_manager=MemoryManager(self.config, load_external=False),
+                    set_mode_fn=_set_approval,
+                )
+                return out or (
+                    "Unknown /memory subcommand. Use: pending, approve <id>, "
+                    "reject <id>, approval <on|off>."
+                )
+
+            return self._control_reply(ev, key, "/memory", action, data={"args": args})
+        if text == "/skills" or text.startswith("/skills "):
+            args = text[len("/skills"):].strip().split()
+
+            def action(proxy):
+                from .. import write_approval as wa
+                from ..skills import SkillsLoader
+                from ..write_approval_review import handle_pending_subcommand
+
+                gate_on = wa.write_approval_enabled(wa.SKILLS, config=self.config)
+                wants_toggle = bool(args) and args[0].lower() in {"approval", "mode"}
+                if not gate_on and not wants_toggle and wa.pending_count(wa.SKILLS, config=self.config) == 0:
+                    return (
+                        "Skill write approval is off (skills.write_approval). "
+                        "Enable it with /skills approval on, then review staged "
+                        "writes here with /skills pending."
+                    )
+
+                def _set_approval(enabled: bool) -> None:
+                    self.config.set("skills.write_approval", bool(enabled))
+                    self._drop_agent(key)
+
+                out = handle_pending_subcommand(
+                    wa.SKILLS,
+                    args,
+                    config=self.config,
+                    skills_loader=SkillsLoader(self.config, cwd=self.cwd),
+                    set_mode_fn=_set_approval,
+                )
+                return out or (
+                    "Unknown /skills subcommand on this platform. Use: pending, "
+                    "approve <id>, reject <id>, diff <id>, approval <on|off>. "
+                    "(Search/install are CLI-only.)"
+                )
+
+            return self._control_reply(ev, key, "/skills", action, data={"args": args})
         if text == "/stop":
             running = (lk := self._key_locks.get(key)) is not None and lk.locked()
             agent = self._agents.get(key) if running else None
@@ -1036,6 +1218,15 @@ class GatewayRunner:
                 key,
                 text.split()[0],
                 lambda proxy: self._gateway_status(key, proxy.session),
+            )
+        if text == "/commands" or text.startswith("/commands "):
+            arg = text[len("/commands"):].strip()
+            return self._control_reply(
+                ev,
+                key,
+                "/commands",
+                lambda _proxy: self._gateway_commands(ev, arg),
+                data={"page": arg},
             )
         if text == "/whoami":
             return self._control_reply(
@@ -1373,6 +1564,16 @@ class GatewayRunner:
                 agent.tool_context.asker = asker
             if approver is not None:
                 agent.tool_context.approver = approver
+            approval_notifier = self._gateway_approval_notifier(ev, key)
+            approval_notifier_registered = False
+            if approval_notifier is not None:
+                try:
+                    from ..tools.thread_context import register_approval_notifier
+
+                    register_approval_notifier(key, approval_notifier)
+                    approval_notifier_registered = True
+                except Exception:  # noqa: BLE001
+                    approval_notifier_registered = False
             try:
                 # Safety net: a gateway session can accumulate messages between turns
                 # (overnight Telegram/Discord) and blow past the window before the agent's
@@ -1531,6 +1732,21 @@ class GatewayRunner:
                 return reply
             except Exception as e:  # noqa: BLE001
                 return f"⚠ error: {type(e).__name__}: {e}"
+            finally:
+                if approval_notifier_registered:
+                    try:
+                        from ..tools.thread_context import unregister_approval_notifier
+
+                        unregister_approval_notifier(key)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        adapter = self._adapter_for_platform(ev.platform)
+                        clear_prompts = getattr(adapter, "clear_pending_approval_prompts", None)
+                        if callable(clear_prompts):
+                            clear_prompts(key)
+                    except Exception:  # noqa: BLE001
+                        pass
 
     def _gateway_hygiene(self, agent, session):
         """Pre-turn compaction safety net (AEGIS "session hygiene"). Fires only when a

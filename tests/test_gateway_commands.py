@@ -22,7 +22,9 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     r = _runner(tmp_path, monkeypatch)
     out = r.dispatch(_ev("/whoami"))
     assert "telegram" in out and "@alien" in out and "busy_mode: queue" in out
-    assert "/whoami" in r.dispatch(_ev("/help"))
+    help_out = r.dispatch(_ev("/help"))
+    assert "/whoami" in help_out
+    assert "/commands [page]" in help_out
     from aegis.runs import RunStore
     key = r._key(_ev("x"))
     runs = [row for row in RunStore().list(session_id=key, limit=10)
@@ -42,6 +44,107 @@ def test_whoami_and_help(tmp_path, monkeypatch):
     assert meta["gateway"]["user_id"] == "u1"
     assert meta["gateway"]["user_name"] == "alien"
     assert "updated_at" in meta["gateway"]
+
+
+def test_commands_lists_gateway_registry_with_pagination(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+
+    first = r.dispatch(_ev("/commands"))
+
+    assert "AEGIS gateway commands (16 total, page 1/2)" in first
+    assert "`/new [title]` -- Start a fresh gateway session (alias: `/reset`)" in first
+    assert "`/commands [page]` -- Browse gateway commands" in first
+    assert "/commands 2" in first
+
+    second = r.dispatch(_ev("/commands 2"))
+    assert "page 2/2" in second
+    assert "`/subgoal [text|remove|clear]` -- Manage subgoals" in second
+    assert "/commands 1" in second
+
+    assert "usage: /commands [page]" in r.dispatch(_ev("/commands nope"))
+    high = r.dispatch(_ev("/commands 99"))
+    assert "page 2/2" in high
+    assert "requested page 99; showing page 2." in high
+
+    from aegis.runs import RunStore
+    key = r._key(_ev("x"))
+    runs = [
+        row for row in RunStore().list(session_id=key, limit=10)
+        if row["kind"] == "control" and row["data"].get("command") == "/commands"
+    ]
+    assert {row["data"].get("page") for row in runs} >= {"", "2", "nope", "99"}
+
+
+def test_gateway_memory_pending_and_approve_all_uses_on_disk_store(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    from aegis import write_approval as wa
+
+    pending = wa.stage_write(
+        wa.MEMORY,
+        {
+            "action": "add",
+            "target": "memory",
+            "content": "Gateway approval applies pending memory writes.",
+        },
+        "Add gateway-approved memory",
+        origin="background_review",
+        config=r.config,
+    )
+
+    listed = r.dispatch(_ev("/memory pending"))
+    assert pending["id"] in listed
+    assert "/memory approve <id>" in listed
+    assert "/memory reject <id>" in listed
+
+    approved = r.dispatch(_ev("/memory approve all"))
+    assert "Approved 1 memory write(s)." in approved
+    assert wa.pending_count(wa.MEMORY, config=r.config) == 0
+    assert "Gateway approval applies pending memory writes." in (
+        tmp_path / "memories" / "MEMORY.md"
+    ).read_text(encoding="utf-8")
+
+
+def test_gateway_skills_approval_pending_diff_and_approve_create(tmp_path, monkeypatch):
+    r = _runner(tmp_path, monkeypatch)
+    from aegis import config as cfg
+    from aegis import write_approval as wa
+
+    off = r.dispatch(_ev("/skills pending"))
+    assert "Skill write approval is off" in off
+    assert "/skills approval on" in off
+
+    enabled = r.dispatch(_ev("/skills approval on"))
+    assert "skills.write_approval set to 'on'" in enabled
+    assert r.config.get("skills.write_approval") is True
+
+    content = (
+        "---\n"
+        "name: gateway-skill\n"
+        "description: Use for gateway write approval tests.\n"
+        "---\n\n"
+        "## Steps\n1. Stay pending until the gateway approves it.\n"
+    )
+    pending = wa.stage_write(
+        wa.SKILLS,
+        {"action": "create", "name": "gateway-skill", "content": content},
+        "Create gateway-skill",
+        origin="background_review",
+        config=r.config,
+    )
+
+    listed = r.dispatch(_ev("/skills pending"))
+    assert pending["id"] in listed
+    assert "/skills approve <id>" in listed
+    assert "/skills diff <id>" in listed
+
+    diff = r.dispatch(_ev(f"/skills diff {pending['id']}"))
+    assert f"# Pending skill write {pending['id']}" in diff
+    assert "Stay pending until the gateway approves it." in diff
+
+    approved = r.dispatch(_ev(f"/skills approve {pending['id']}"))
+    assert "Approved 1 skills write(s)." in approved
+    assert wa.pending_count(wa.SKILLS, config=r.config) == 0
+    assert (cfg.skills_dir() / "gateway-skill" / "SKILL.md").is_file()
 
 
 def test_gateway_session_keys_are_thread_aware(tmp_path, monkeypatch):

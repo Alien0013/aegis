@@ -162,13 +162,14 @@ def test_provider_uses_model_metadata_for_context():
 
 
 # --- schema sanitizer -------------------------------------------------------
-def test_schema_sanitizer_strips_annotations_keeps_structure():
+def test_schema_sanitizer_strips_dialect_metadata_keeps_annotations_and_structure():
     from aegis.providers.schema import sanitize
     out = sanitize({"type": ["string", "null"], "$schema": "x", "examples": [1],
                     "properties": {"a": {"type": "integer", "readOnly": True}}, "required": ["a"]})
     assert out["type"] == "string"                    # union normalized
-    assert "$schema" not in out and "examples" not in out
-    assert "readOnly" not in out["properties"]["a"]   # nested annotation dropped
+    assert "$schema" not in out
+    assert out["examples"] == [1]
+    assert out["properties"]["a"]["readOnly"] is True # nested annotation preserved
     assert out["required"] == ["a"]                   # structure preserved
 
 

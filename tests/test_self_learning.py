@@ -303,6 +303,10 @@ def test_skill_review_done_includes_change_details(tmp_path):
     parent_session = Session.create("parent")
     parent_session.messages = [Message.user("patch the reusable workflow"), Message.assistant("noted")]
     provider = FakeProvider([
+        LLMResponse(text="", tool_calls=[ToolCall("v1", "skill_manage", {
+            "action": "view",
+            "name": "review-skill",
+        })]),
         LLMResponse(text="", tool_calls=[ToolCall("s1", "skill_manage", {
             "action": "patch",
             "name": "review-skill",

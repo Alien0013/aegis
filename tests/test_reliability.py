@@ -86,7 +86,7 @@ def test_long_context_tier_429_reduces_runtime_context_window(tmp_path):
         name = "anthropic"
         model = "claude-sonnet-4.6"
         api_mode = None
-        auth = None
+        auth = type("Auth", (), {"available": lambda self: True})()
 
         def __init__(self):
             self.calls = 0
@@ -173,15 +173,20 @@ def test_fallback_short_circuits_unfixable_errors():
                 raise self.exc
             return self.resp
 
-    # content_policy on primary -> raise immediately, DON'T try the fallback
+    # content_policy on primary -> try the configured fallback once
     prim = P("a", exc=ProviderHTTPError(400, "rejected by our content policy"))
     fb = P("b", resp="ok")
+    assert FallbackProvider(prim, [fb]).complete([]) == "ok" and fb.calls == 1
+
+    # context overflow on primary -> raise immediately, DON'T try the fallback
+    prim_overflow = P("a", exc=ProviderHTTPError(400, "maximum context length is 8192 tokens"))
+    fb_overflow = P("b", resp="should-not-run")
     try:
-        FallbackProvider(prim, [fb]).complete([])
+        FallbackProvider(prim_overflow, [fb_overflow]).complete([])
         raise AssertionError("should have raised")
     except ProviderHTTPError:
         pass
-    assert fb.calls == 0                         # never reached the fallback
+    assert fb_overflow.calls == 0
 
     # server error on primary -> DOES fail over
     prim2 = P("a", exc=ProviderHTTPError(503, "overloaded"))

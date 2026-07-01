@@ -191,19 +191,49 @@ def test_agent_system_prompt_includes_runtime_auth(tmp_path):
     assert "model: gpt-5.5" in prompt
     assert "transport: responses" in prompt
     assert "auth: oauth (openai-codex: logged in) (ready)" in prompt
+    assert "active profile: default" in prompt
+    assert "another profile's skills, plugins, cron jobs, memories, or config" in prompt
     assert "system_status" in prompt
+    assert "# Environment" in prompt
     agent.ensure_system_prompt()
     meta = agent.session.meta
     assert meta["system_prompt_hash"] and meta["system_prompt_chars"] == len(agent.session.messages[0].content)
+    assert "# Environment" not in agent.session.messages[0].content
     parts = meta["prompt_parts"]
     names = {p["name"] for p in parts}
-    assert {"identity", "agentic_guidance", "aegis_capabilities", "tool_guidance", "runtime", "environment"} <= names
+    assert {"identity", "agentic_guidance", "aegis_capabilities", "tool_guidance", "runtime"} <= names
+    assert "environment" not in names
     assert all({"tier", "name", "hash", "chars", "tokens"} <= set(p) for p in parts)
     assert all({"id", "source_name", "cache_stable", "token_estimate", "warnings"} <= set(p) for p in parts)
     assert next(p for p in parts if p["name"] == "identity")["cache_stable"] is True
-    assert next(p for p in parts if p["name"] == "environment")["cache_stable"] is False
+    assert meta["prompt_audit"]["cache"]["volatile_part_count"] == 0
     assert meta["prompt_audit"]["cache"]["stable_part_count"] >= 4
+    snapshot = meta["prompt_snapshot"]
+    assert snapshot["fingerprint"]
+    assert snapshot["stable_fingerprint"]
+    assert snapshot["nonvolatile_part_count"] == len(snapshot["parts"])
+    assert meta["prompt_audit"]["cache"]["snapshot_fingerprint"] == snapshot["fingerprint"]
+    from aegis.agent.loop import _provider_wire_messages
+    wire_system = _provider_wire_messages(agent, agent.session.messages)[0].content
+    assert "# Environment" in wire_system
     assert "system prompt" not in str(meta["prompt_audit"]).lower()
+
+
+def test_system_prompt_names_active_runtime_profile(tmp_path):
+    from aegis import config as config_paths
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    config_paths.set_profile("builder")
+    cfg = Config.load()
+    agent = Agent(config=cfg, provider=_RuntimeProvider(), session=Session.create(), cwd=tmp_path)
+
+    prompt = agent._build_system_prompt()
+
+    assert "active profile: builder" in prompt
+    assert str(config_paths.profile_home("builder")) in prompt
+    assert "Do not modify another profile's skills" in prompt
 
 
 def test_prompt_audit_records_context_file_warnings(tmp_path):
@@ -261,6 +291,88 @@ def test_system_prompt_metadata_matches_stored_prompt_on_nonforced_ensure(tmp_pa
     assert agent.session.meta["system_prompt_chars"] == len(original)
     assert agent.session.meta["prompt_parts"] == original_parts
     assert not any(p["name"] == "platform:discord" for p in agent.session.meta["prompt_parts"])
+
+
+def test_nonforced_ensure_reuses_stored_system_prompt_without_rebuild(tmp_path, monkeypatch):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    agent = Agent(config=cfg, provider=_RuntimeProvider(), session=Session.create(), cwd=tmp_path)
+    agent.ensure_system_prompt()
+    original = agent.session.messages[0].content
+    original_hash = agent.session.meta["system_prompt_hash"]
+    original_parts = list(agent.session.meta["prompt_parts"])
+
+    def fail_rebuild():
+        raise AssertionError("non-forced ensure must not rebuild the cached prompt")
+
+    monkeypatch.setattr(agent, "_build_system_prompt", fail_rebuild)
+    agent.ensure_system_prompt(force=False)
+
+    assert agent.session.messages[0].content == original
+    assert agent.session.meta["system_prompt_hash"] == original_hash
+    assert agent.session.meta["prompt_parts"] == original_parts
+
+
+def test_provider_wire_volatile_context_does_not_churn_prompt_snapshot(tmp_path, monkeypatch):
+    from aegis.agent.agent import Agent
+    from aegis.agent.loop import _provider_wire_messages
+    from aegis.config import Config
+    from aegis.session import Session
+
+    cfg = Config.load()
+    agent = Agent(config=cfg, provider=_RuntimeProvider(), session=Session.create(), cwd=tmp_path)
+    agent.ensure_system_prompt()
+    stored_prompt = agent.session.messages[0].content
+    stored_hash = agent.session.meta["system_prompt_hash"]
+    stored_snapshot = dict(agent.session.meta["prompt_snapshot"])
+
+    monkeypatch.setattr(agent, "_build_volatile_system_context", lambda: "# Environment\nvolatile one")
+    first_wire = _provider_wire_messages(agent, agent.session.messages)[0].content
+    monkeypatch.setattr(agent, "_build_volatile_system_context", lambda: "# Environment\nvolatile two")
+    second_wire = _provider_wire_messages(agent, agent.session.messages)[0].content
+    agent.ensure_system_prompt(force=False)
+
+    assert "volatile one" in first_wire
+    assert "volatile two" in second_wire
+    assert agent.session.messages[0].content == stored_prompt
+    assert agent.session.meta["system_prompt_hash"] == stored_hash
+    assert agent.session.meta["prompt_snapshot"] == stored_snapshot
+
+
+def test_skills_index_snapshot_fingerprint_tracks_rebuilt_skill_context(tmp_path):
+    from aegis.agent.agent import Agent
+    from aegis.config import Config
+    from aegis.session import Session
+
+    skills_dir = tmp_path / "skills"
+    first = skills_dir / "alpha"
+    first.mkdir(parents=True)
+    (first / "SKILL.md").write_text(
+        "---\nname: alpha\ndescription: First test skill.\n---\nbody",
+        encoding="utf-8",
+    )
+    cfg = Config.load()
+    cfg.data["memory"]["enabled"] = False
+    cfg.data["skills"]["include_bundled"] = False
+    agent = Agent(config=cfg, provider=_RuntimeProvider(), session=Session.create(), cwd=tmp_path)
+
+    agent.ensure_system_prompt()
+    before = agent.session.meta["prompt_snapshot"]["skills_fingerprint"]
+    assert before
+
+    second = skills_dir / "beta"
+    second.mkdir()
+    (second / "SKILL.md").write_text(
+        "---\nname: beta\ndescription: Second test skill.\n---\nbody",
+        encoding="utf-8",
+    )
+    agent.ensure_system_prompt(force=True)
+
+    after = agent.session.meta["prompt_snapshot"]["skills_fingerprint"]
+    assert after and after != before
 
 
 def test_system_status_tool_reports_runtime_without_tokens(tmp_path, monkeypatch):
@@ -348,20 +460,40 @@ def test_marketplace_local_install(tmp_path):
 
 
 def test_execute_code_rpc(tmp_path):
+    import asyncio
     import sys
     if sys.platform == "win32":
         return
     from aegis.agent.agent import Agent
     from aegis.config import Config
     from aegis.session import Session
+    from aegis.tools.base import Tool, ToolResult
     from aegis.tools.code_exec import ExecuteCodeTool
+
+    class AsyncProbeTool(Tool):
+        name = "async_probe"
+        description = "Return the active async loop id."
+        parameters = {"type": "object", "properties": {}}
+
+        def run(self, args, ctx):
+            async def inner():
+                return ToolResult.ok(str(id(asyncio.get_running_loop())))
+
+            return inner()
 
     cfg = Config.load()
     cfg.data["tools"]["exec_mode"] = "full"
     agent = Agent(config=cfg, provider=_FakeProvider(), session=Session.create(), cwd=tmp_path)
+    agent.registry.register(AsyncProbeTool())
     code = 'write_file("x.txt", "hi"); print("GOT:", read_file("x.txt").splitlines()[-1])'
     res = ExecuteCodeTool().run({"code": code}, agent.tool_context)
     assert "GOT:" in res.content and "hi" in res.content
+    loop_res = ExecuteCodeTool().run({
+        "code": 'print("LOOPS", call_tool("async_probe"), call_tool("async_probe"))',
+    }, agent.tool_context)
+    marker = next(line for line in loop_res.content.splitlines() if line.startswith("LOOPS "))
+    _, first_loop, second_loop = marker.split()
+    assert first_loop == second_loop
 
 
 def test_apply_patch(tmp_path):

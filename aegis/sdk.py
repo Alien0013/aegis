@@ -260,10 +260,11 @@ class AegisClient:
     def resume(self, session_id: str) -> Session:
         """Load a saved session by id, title, or id prefix."""
 
-        session = self.store.load(session_id)
+        resolved_id = self.store.resolve_resume_session_id(session_id)
+        session = self.store.load(resolved_id or session_id)
         if session is None:
             raise LookupError(f"session not found: {session_id}")
-        return self.store.compression_tip(session.id) or session
+        return session
 
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         return self.store.list(limit=limit)
@@ -272,11 +273,7 @@ class AegisClient:
         """Create a child session linked to an existing one."""
 
         parent = self.resume(session_id)
-        child = self.store.fork(parent)
-        if title:
-            child.title = title
-            self.store.save(child)
-        return child
+        return self.store.branch(parent, title=title, reason="sdk_branch")
 
     def get_trace(self, trace_id: str) -> dict[str, Any] | None:
         from .tracing import TraceStore

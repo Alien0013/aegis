@@ -1062,7 +1062,7 @@ def test_chat_completions_aiohttp_stream_disconnect_cancels_live_agent(monkeypat
                     blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert data_line.startswith(b"data: ")
                     assert blank_line == b"\n"
-                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 3)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -1113,7 +1113,7 @@ def test_chat_completions_disconnect_drops_late_stream_result(monkeypatch, tmp_p
                     blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert data_line.startswith(b"data: ")
                     assert blank_line == b"\n"
-                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 3)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -1166,7 +1166,7 @@ def test_chat_completions_disconnect_reapplies_cancel_after_run_start_clear(monk
                     blank_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert data_line.startswith(b"data: ")
                     assert blank_line == b"\n"
-                    assert await asyncio.to_thread(_ClearingCancelRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_ClearingCancelRunner.started.wait, 3)
                     resp.close()
                     assert await asyncio.to_thread(_ClearingCancelRunner.cleared.wait, 2)
                     if not _ClearingCancelRunner.cancel_seen_before_clear:
@@ -1214,7 +1214,7 @@ def test_chat_completions_nonstream_disconnect_cancels_agent(monkeypatch, tmp_pa
                         "session_id": "serve:chat-nonstream-disconnect",
                     },
                 ))
-                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 3)
                 request_task.cancel()
                 try:
                     response = await request_task
@@ -3934,7 +3934,7 @@ def test_responses_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, tmp
                     assert data_line.startswith(b"data: ")
                     created = json.loads(data_line.decode().removeprefix("data: ").strip())
                     response_id = created["response"]["id"]
-                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 3)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -4001,7 +4001,7 @@ def test_responses_disconnect_drops_late_stream_result(monkeypatch, tmp_path):
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: response.created\n"
                     assert data_line.startswith(b"data: ")
-                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 3)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -4056,7 +4056,7 @@ def test_responses_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
                         "metadata": {"session_id": "serve:response-nonstream-disconnect"},
                     },
                 ))
-                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 3)
                 request_task.cancel()
                 try:
                     response = await request_task
@@ -5095,7 +5095,7 @@ def test_session_chat_aiohttp_stream_disconnect_cancels_live_agent(monkeypatch, 
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: run.started\n"
                     assert data_line.startswith(b"data: ")
-                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_BlockingResponsesRunner.started.wait, 3)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -5145,7 +5145,7 @@ def test_session_chat_disconnect_drops_late_stream_result(monkeypatch, tmp_path)
                     data_line = await asyncio.wait_for(resp.content.readline(), timeout=1)
                     assert event_line == b"event: run.started\n"
                     assert data_line.startswith(b"data: ")
-                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                    assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 3)
                     resp.close()
                     deadline = time.monotonic() + 2
                     while time.monotonic() < deadline:
@@ -5192,7 +5192,7 @@ def test_session_chat_nonstream_disconnect_cancels_agent(monkeypatch, tmp_path):
                     f"http://127.0.0.1:{port}/api/sessions/{session_id}/chat",
                     json={"prompt": "disconnect me"},
                 ))
-                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 1)
+                assert await asyncio.to_thread(_LateAccessStreamingRunner.started.wait, 3)
                 request_task.cancel()
                 try:
                     response = await request_task

@@ -426,6 +426,47 @@ def slash_matches(query: str = "") -> list[SlashCommand]:
     ]
 
 
+def resolve_slash_prefix(name: str) -> tuple[str | None, list[str]]:
+    """Resolve an exact or abbreviated built-in slash command name.
+
+    The reference CLI accepts unique slash command prefixes at dispatch time. When a prefix
+    has multiple matches, an exact match wins; otherwise a uniquely shortest
+    match wins. Ambiguous prefixes return the sorted candidates for help text.
+    """
+    typed = name.strip().lower()
+    if not typed:
+        return None, []
+    if not typed.startswith("/"):
+        typed = f"/{typed}"
+    matches = [candidate for candidate in SLASH if candidate.startswith(typed)]
+    if len(matches) > 1:
+        exact = [candidate for candidate in matches if candidate == typed]
+        if len(exact) == 1:
+            matches = exact
+        else:
+            min_len = min(len(candidate) for candidate in matches)
+            shortest = [candidate for candidate in matches if len(candidate) == min_len]
+            if len(shortest) == 1:
+                matches = shortest
+    if len(matches) == 1:
+        return matches[0], []
+    return None, sorted(matches)
+
+
+def _expand_slash_prefix_input(text: str) -> tuple[str, list[str]]:
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return text, []
+    parts = stripped.split(maxsplit=1)
+    resolved, ambiguous = resolve_slash_prefix(parts[0])
+    if not resolved:
+        return stripped, ambiguous
+    if resolved == parts[0].lower():
+        return stripped, []
+    rest = parts[1] if len(parts) > 1 else ""
+    return f"{resolved} {rest}".rstrip(), []
+
+
 def slash_help_lines(query: str = "") -> list[str]:
     rows = slash_matches(query)
     if not rows:
@@ -1837,18 +1878,22 @@ def _resolve_session_ref(store: SessionStore, agent: Any, ref: str) -> Session |
         choices = list(getattr(agent, "_terminal_session_choices", []) or [])
         idx = int(ref) - 1
         if 0 <= idx < len(choices):
-            return store.load(choices[idx])
+            resolved = store.resolve_resume_session_id(choices[idx])
+            return store.load(resolved) or store.load(choices[idx])
     sess = store.load(ref)
     if sess and sess.id == ref:
-        return sess
+        resolved = store.resolve_resume_session_id(sess.id)
+        return store.load(resolved) or sess
     title_match = store.resolve_title_to_tip(ref)
     if title_match:
         return title_match
     if sess:
-        return sess
+        resolved = store.resolve_resume_session_id(sess.id)
+        return store.load(resolved) or sess
     matches = _session_choices(store, ref, limit=2)
     if len(matches) == 1:
-        return store.load(matches[0]["id"])
+        resolved = store.resolve_resume_session_id(matches[0]["id"])
+        return store.load(resolved) or store.load(matches[0]["id"])
     return None
 
 
@@ -1983,6 +2028,12 @@ def handle_slash(
     parts = cmd.strip().split()
     name = parts[0].lower()
     arg = " ".join(parts[1:])
+    resolved_name, ambiguous_matches = resolve_slash_prefix(name)
+    if ambiguous_matches:
+        _out(f"ambiguous command {name}; did you mean: {', '.join(ambiguous_matches)}?", style="yellow")
+        return ""
+    if resolved_name:
+        name = resolved_name
     alias_target = {
         "/commands": ("/help", arg),
         "/compose": ("/prompt", arg),
@@ -2340,7 +2391,20 @@ def handle_slash(
             g = f" [{','.join(t.groups)}]" if t.groups else ""
             _out(f"  {t.name}{g} — {t.description.splitlines()[0]}")
     elif name == "/skills":
-        if agent.skills:
+        from .. import write_approval as wa
+        from ..write_approval_review import handle_pending_subcommand, is_review_subcommand
+
+        review_args = parts[1:] if len(parts) > 1 else []
+        if review_args and is_review_subcommand(review_args[0], subsystem=wa.SKILLS):
+            out = handle_pending_subcommand(
+                wa.SKILLS,
+                review_args,
+                config=agent.config,
+                skills_loader=agent.skills,
+                set_mode_fn=lambda enabled: agent.config.set("skills.write_approval", enabled),
+            )
+            _out(out or "Unknown /skills approval subcommand.")
+        elif agent.skills:
             _out(agent.skills.index_block() or "(no skills installed)")
     elif name == "/skill":
         sub = parts[1].lower() if len(parts) > 1 else "save"
@@ -2369,9 +2433,24 @@ def handle_slash(
             except Exception as e:  # noqa: BLE001
                 _out(f"skill extraction needs a working provider/key: {e}", style="yellow")
     elif name == "/memory":
-        if agent.memory:
+        from .. import write_approval as wa
+        from ..write_approval_review import handle_pending_subcommand, is_review_subcommand
+
+        review_args = parts[1:] if len(parts) > 1 else []
+        if not review_args or is_review_subcommand(review_args[0], subsystem=wa.MEMORY):
+            out = handle_pending_subcommand(
+                wa.MEMORY,
+                review_args,
+                config=agent.config,
+                memory_manager=agent.memory,
+                set_mode_fn=lambda enabled: agent.config.set("memory.write_approval", enabled),
+            )
+            _out(out or "Unknown /memory approval subcommand.")
+        elif review_args[0].lower() == "show" and agent.memory:
             _out("# MEMORY\n" + (agent.memory.store.raw("memory") or "(empty)"))
             _out("# USER\n" + (agent.memory.store.raw("user") or "(empty)"))
+        else:
+            _out("Unknown /memory subcommand. Use: pending, approve <id>, reject <id>, approval <on|off>, show.")
     elif name == "/bundles":
         _out("skill bundles: run `aegis skills bundles` to list installable bundled skill groups.")
     elif name == "/voice":
@@ -2709,12 +2788,12 @@ def handle_slash(
     elif name == "/branch":
         active_store = store or SessionStore()
         title = arg.strip() or agent.session.title
-        child = active_store.fork(agent.session)
-        if title:
-            child.title = title
-        child.meta["branch_surface"] = surface
-        child.meta["branch_reason"] = "manual_terminal_branch"
-        active_store.save(child)
+        child = active_store.branch(
+            agent.session,
+            title=title,
+            reason="manual_terminal_branch",
+            surface=surface,
+        )
         parent_trace = (agent.session.meta.get("last_trace_id") or agent.session.meta.get("trace_id") or "")
         _switch_session(agent, child, reason="manual_branch")
         suffix = f" · trace {str(parent_trace)[:12]}" if parent_trace else ""
@@ -2904,6 +2983,12 @@ def process_terminal_input(user: str, agent: Any, runner: SurfaceRunner, store: 
         return "handled"
     if quick_memory(user, agent):    # '#' saves a memory instantly, no model turn
         return "handled"
+    if user.startswith("/"):
+        user, ambiguous_matches = _expand_slash_prefix_input(user)
+        if ambiguous_matches:
+            base = user.split(maxsplit=1)[0].lower()
+            _out(f"ambiguous command {base}; did you mean: {', '.join(ambiguous_matches)}?", style="yellow")
+            return "handled"
     if user.startswith("/ultracode"):
         uc_prompt = handle_ultracode_command(user, agent)
         if not uc_prompt:

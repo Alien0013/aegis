@@ -623,7 +623,7 @@ def test_cli_bare_first_run_guard(capsys):
 
     assert rc == 2
     out = capsys.readouterr().out
-    assert "not configured" in out
+    assert "first run must configure AEGIS" in out
     assert "aegis setup" in out
 
 

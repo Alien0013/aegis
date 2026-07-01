@@ -108,6 +108,61 @@ def test_install_sh_help_mentions_onboarding_modes():
     assert "--skip-onboard" in res.stdout
     assert "--toolsets" in res.stdout
     assert "--skills" in res.stdout
+    assert "--manifest" in res.stdout
+    assert "--stage" in res.stdout
+    assert "--json" in res.stdout
+
+
+def _last_json_line(text: str) -> dict:
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            return json.loads(line)
+    raise AssertionError(f"no JSON line found in output:\n{text}")
+
+
+def test_install_sh_manifest_exposes_stage_protocol():
+    res = subprocess.run(["bash", "install.sh", "--manifest"], cwd=ROOT, capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    payload = json.loads(res.stdout)
+    assert payload["protocol_version"] == 1
+    assert payload["product"] == "aegis"
+    stages = {stage["name"]: stage for stage in payload["stages"]}
+    assert list(stages) == [
+        "prepare",
+        "venv",
+        "package",
+        "browser",
+        "launcher",
+        "tools",
+        "setup",
+        "verify",
+        "complete",
+    ]
+    assert stages["setup"]["needs_user_input"] is True
+    assert stages["prepare"]["needs_user_input"] is False
+
+
+def test_install_sh_stage_protocol_skips_setup_noninteractively():
+    res = subprocess.run(
+        ["bash", "install.sh", "--stage", "setup", "--json", "--non-interactive"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0, res.stderr
+    payload = _last_json_line(res.stdout)
+    assert payload == {"ok": True, "stage": "setup", "skipped": True}
+
+
+def test_install_sh_stage_protocol_reports_unknown_stage():
+    res = subprocess.run(["bash", "install.sh", "--stage", "missing", "--json"], cwd=ROOT, capture_output=True, text=True)
+    assert res.returncode == 2
+    payload = _last_json_line(res.stdout)
+    assert payload["ok"] is False
+    assert payload["stage"] == "missing"
+    assert payload["skipped"] is False
+    assert "exit code 2" in payload["reason"]
 
 
 def test_installers_advertise_first_run_surface_selection():

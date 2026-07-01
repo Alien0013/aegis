@@ -19,6 +19,7 @@ class CronJobTool(Tool):
     )
     groups = ["automation"]
     toolset = "core"
+    extra_toolsets = ["cronjob"]
     parameters = {
         "type": "object",
         "properties": {

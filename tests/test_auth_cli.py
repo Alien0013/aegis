@@ -36,6 +36,60 @@ def test_auth_add_list_remove_pool_key_without_leaking_secret(monkeypatch, tmp_p
     assert pool["keys"] == [key2]
 
 
+def test_auth_remove_provider_prints_borrowed_source_hints_without_leaking_secret(monkeypatch, tmp_path, capsys):
+    home = tmp_path / "home"
+    codex_home = tmp_path / "codex"
+    codex_auth = codex_home / "auth.json"
+    codex_auth.parent.mkdir(parents=True)
+    codex_auth.write_text(
+        json.dumps({"tokens": {"access_token": "codex-external", "refresh_token": "codex-refresh"}}),
+        encoding="utf-8",
+    )
+    before = codex_auth.read_text(encoding="utf-8")
+    monkeypatch.setenv("AEGIS_HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    home.mkdir(parents=True)
+    (home / "auth.json").write_text(
+        json.dumps(
+            {
+                "openai-codex": {"source": "codex-cli", "label": "Codex CLI"},
+                "credential_pool": {
+                    "openai-codex": [
+                        {"id": "borrowed", "source": "codex-cli", "label": "Codex CLI"},
+                        {
+                            "id": "owned",
+                            "source": "manual:device_code",
+                            "access_token": "owned-token",
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from aegis.cli.main import main
+
+    assert main(["auth", "remove", "openai-codex"]) == 0
+    out = capsys.readouterr().out
+
+    assert "removed stored auth for openai-codex" in out
+    assert "removed 2 pooled credential(s)" in out
+    assert "suppressed source(s): codex-cli" in out
+    assert "Suppressed Codex CLI OAuth reference" in out
+    assert "Codex CLI credentials remain" in out
+    assert "codex-external" not in out
+    assert "codex-refresh" not in out
+    assert "owned-token" not in out
+    assert codex_auth.read_text(encoding="utf-8") == before
+
+    payload = json.loads((home / "auth.json").read_text(encoding="utf-8"))
+    assert "openai-codex" not in payload
+    assert "openai-codex" not in payload.get("credential_pool", {})
+    assert "codex-cli" in payload["suppressed_sources"]["openai-codex"]
+
+
 def test_auth_reset_pool_state_keeps_configured_keys(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AEGIS_HOME", str(tmp_path / "home"))
     from aegis import credentials

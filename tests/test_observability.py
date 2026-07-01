@@ -469,7 +469,7 @@ def test_import_claude_cli_login(monkeypatch, tmp_path):
     """Reuse an existing Claude Code login for the anthropic provider."""
     import json
     import time
-    from aegis.providers.auth import AuthStore, import_claude_cli_login
+    from aegis.providers.auth import AuthStore, OAuthAuth, OAuthConfig, import_claude_cli_login
     monkeypatch.setenv("HOME", str(tmp_path))
     cdir = tmp_path / ".claude"
     cdir.mkdir()
@@ -481,8 +481,24 @@ def test_import_claude_cli_login(monkeypatch, tmp_path):
     ok, detail = import_claude_cli_login(store)
     assert ok and "max" in detail
     creds = store.load("anthropic")
-    assert creds["access_token"] == "tok-abc" and creds["token_type"] == "Bearer"
-    assert creds["refresh_token"] == "ref-xyz" and creds["expires_at"] < 1e11   # ms -> s
+    assert creds["source"] == "claude_code"
+    assert creds["external_token_path"] == str(cdir / ".credentials.json")
+    assert creds["reference_only"] is True
+    assert creds["token_type"] == "Bearer"
+    assert creds["expires_at"] < 1e11   # ms -> s
+    assert "access_token" not in creds
+    assert "refresh_token" not in creds
+    auth_text = (tmp_path / "auth.json").read_text(encoding="utf-8")
+    assert "tok-abc" not in auth_text
+    assert "ref-xyz" not in auth_text
+
+    auth = OAuthAuth(OAuthConfig(
+        provider="anthropic",
+        client_id="client",
+        authorize_url="https://claude.ai/oauth/authorize",
+        token_url="https://console.anthropic.com/v1/oauth/token",
+    ), store)
+    assert auth.headers()["Authorization"] == "Bearer tok-abc"
     # missing credential -> clean failure, no crash
     (cdir / ".credentials.json").unlink()
     ok2, _ = import_claude_cli_login(store)

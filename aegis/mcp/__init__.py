@@ -10,6 +10,16 @@ from .client import (
     save_tool_checklist,
     tool_checklist,
 )
+from .oauth_manager import get_mcp_oauth_manager, reset_mcp_oauth_manager_for_tests
+from .startup import (
+    background_mcp_discovery_error,
+    claim_background_mcp_discovery,
+    join_mcp_discovery,
+    mcp_discovery_in_flight,
+    reset_background_mcp_discovery_for_tests,
+    start_background_mcp_discovery,
+    wait_for_mcp_discovery,
+)
 
 __all__ = [
     "MCPClient",
@@ -20,4 +30,13 @@ __all__ = [
     "probe_server",
     "save_tool_checklist",
     "tool_checklist",
+    "get_mcp_oauth_manager",
+    "reset_mcp_oauth_manager_for_tests",
+    "background_mcp_discovery_error",
+    "claim_background_mcp_discovery",
+    "join_mcp_discovery",
+    "mcp_discovery_in_flight",
+    "reset_background_mcp_discovery_for_tests",
+    "start_background_mcp_discovery",
+    "wait_for_mcp_discovery",
 ]

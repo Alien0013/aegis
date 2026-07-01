@@ -33,6 +33,60 @@ def _reported_cost(usage: dict) -> float | None:
         return None
 
 
+def _merge_payload(base: dict[str, Any], additions: dict[str, Any]) -> None:
+    for key, value in additions.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _merge_payload(base[key], value)
+        else:
+            base[key] = value
+
+
+def request_extra_headers(request_overrides: dict | None) -> dict[str, str]:
+    if not isinstance(request_overrides, dict):
+        return {}
+    headers = request_overrides.get("extra_headers")
+    if not isinstance(headers, dict):
+        return {}
+    return {str(k): str(v) for k, v in headers.items() if k and v is not None}
+
+
+def request_timeout(default: float, request_overrides: dict | None) -> float:
+    if not isinstance(request_overrides, dict) or "timeout" not in request_overrides:
+        return default
+    value = request_overrides.get("timeout")
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def apply_request_overrides(
+    payload: dict[str, Any],
+    request_overrides: dict | None,
+    *,
+    strip_service_tier: bool = False,
+) -> None:
+    if not isinstance(request_overrides, dict):
+        return
+    extra_body = request_overrides.get("extra_body")
+    if isinstance(extra_body, dict):
+        _merge_payload(payload, extra_body)
+    for key, value in request_overrides.items():
+        if key in {"extra_body", "extra_headers", "timeout"}:
+            continue
+        if strip_service_tier and key == "service_tier":
+            continue
+        if isinstance(value, dict) and isinstance(payload.get(key), dict):
+            _merge_payload(payload[key], value)
+        else:
+            payload[key] = value
+    if strip_service_tier:
+        payload.pop("service_tier", None)
+
+
 class ChatCompletionsTransport(ProviderTransport):
     api_mode = ApiMode.CHAT_COMPLETIONS
 
@@ -105,21 +159,31 @@ class ChatCompletionsTransport(ProviderTransport):
         on_reasoning: OnDelta | None = None,
         service_tier: str = "",
         response_format: dict | None = None,
+        request_overrides: dict | None = None,
     ) -> LLMResponse:
         url = f"{base_url}/chat/completions"
-        headers = {"Content-Type": "application/json", **(extra_headers or {}), **auth.headers()}
+        headers = {
+            "Content-Type": "application/json",
+            **(extra_headers or {}),
+            **request_extra_headers(request_overrides),
+            **auth.headers(),
+        }
+        timeout = request_timeout(timeout, request_overrides)
+        is_xai = self._is_xai_chat(base_url, model)
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._to_wire_messages(messages),
             "stream": stream,
         }
+        if max_tokens and int(max_tokens) > 0:
+            payload["max_tokens"] = int(max_tokens)
         # Reasoning effort (OpenAI o-series + compatible): low | medium | high.
         eff = {"minimal": "low", "low": "low", "medium": "medium", "high": "high",
                "xhigh": "high"}.get(reasoning)
         if eff:
             payload["reasoning_effort"] = eff
         clean_service_tier = str(service_tier or "").strip()
-        if clean_service_tier and not self._is_xai_chat(base_url, model):
+        if clean_service_tier and not is_xai:
             payload["service_tier"] = clean_service_tier
         wire_tools = self._to_wire_tools(tools)
         if wire_tools:
@@ -129,6 +193,7 @@ class ChatCompletionsTransport(ProviderTransport):
             payload["response_format"] = response_format
         if stream:
             payload["stream_options"] = {"include_usage": True}
+        apply_request_overrides(payload, request_overrides, strip_service_tier=is_xai)
 
         if stream:
             return self._stream(url, headers, payload, on_delta, timeout, on_reasoning)
